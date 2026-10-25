@@ -1,6 +1,6 @@
 {
   "name": "follow-back-checker",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "private": true,
   "description": "Who you follow on Instagram that does not follow you back, from your own logged-in session. Browser extension, Android app, userscript and an offline export reader.",
   "license": "MIT",

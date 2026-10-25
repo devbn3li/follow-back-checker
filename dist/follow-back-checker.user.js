@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Follow Back Checker
 // @namespace    https://github.com/devbn3li/follow-back-checker
-// @version      1.7.0
+// @version      1.8.0
 // @description  Who you follow that does not follow you back, from your own logged-in instagram.com session. Nothing leaves the browser.
 // @author       devbn3li
 // @match        https://www.instagram.com/*
@@ -11,7 +11,7 @@
 // @downloadURL  https://raw.githubusercontent.com/devbn3li/follow-back-checker/main/dist/follow-back-checker.user.js
 // ==/UserScript==
 
-/* Follow Back Checker 1.7.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+/* Follow Back Checker 1.8.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
 // Panel styles. Injected into a shadow root by content.js, so Instagram's own CSS cannot leak in
 // and a strict page CSP cannot block them (they go in through a constructed stylesheet).
 var FBC_CSS = `
@@ -153,6 +153,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .unf.follow { border-color: var(--accent); color: var(--accent); }
 .unf.follow:hover { background: var(--accent-soft); }
 .unf.follow.arm { background: var(--accent); color: var(--accent-ink); }
+.unf.undo { border-color: var(--border); color: var(--fg); }
+.unf.undo:hover { background: var(--accent-soft); border-color: var(--accent); }
+.unf.undo.arm { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.chip.muted { opacity: 0.7; }
 .modal { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); display: grid; place-items: center; z-index: 5; padding: 16px; }
 .modal .box { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 12px; padding: 16px; max-width: 380px; display: grid; gap: 10px; box-shadow: 0 12px 40px var(--shadow); }
 .mtitle { font-weight: 700; font-size: 15px; }
@@ -448,7 +452,95 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     return '';
   }
 
-  return { carryMe, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
+  // What a friendships/show answer says about an action that is about to run. 'go' means do it;
+  // anything else is a reason to stop, and 'unknown' means the answer could not be read.
+  function preCheck(kind, st) {
+    const known = st && typeof st === 'object' && (typeof st.following === 'boolean' || typeof st.followed_by === 'boolean');
+    if (!known) return 'unknown';
+    if (kind === 'unfollow') {
+      if (st.followed_by === true) return 'follows_you';
+      if (st.following === false) return 'not_following';
+      return st.following === true ? 'go' : 'unknown';
+    }
+    if (kind === 'follow') {
+      if (st.followed_by === false) return 'left';
+      if (st.following === true) return 'already';
+      if (st.outgoing_request === true) return 'requested';
+      return 'go';
+    }
+    if (kind === 'cancel') {
+      if (st.following === true) return 'accepted';
+      if (st.outgoing_request === true) return 'go';
+      return st.outgoing_request === false ? 'gone' : 'unknown';
+    }
+    return 'unknown';
+  }
+
+  // The log of actions taken from the tool: newest last, capped.
+  const UNDO = { unfollow: 'follow', follow: 'unfollow', request: 'cancel', cancel: 'follow' };
+  function appendLog(log, entry, cap) {
+    const base = Array.isArray(log) ? log.filter((e) => e && typeof e.at === 'number' && typeof e.u === 'string') : [];
+    return base.concat([entry]).slice(-(cap || 500));
+  }
+  function markUndone(log, at, u, when) {
+    return (log || []).map((e) => (e && e.at === at && e.u === u ? Object.assign({}, e, { undone: when }) : e));
+  }
+
+  // Follow requests you sent, out of Instagram's export (pending_follow_requests.json or its HTML
+  // page) or any list of usernames. Each row: { u, ts } with ts in ms or null.
+  function parsePending(input) {
+    const text = String(input || '');
+    const trimmed = text.trim();
+    const out = [];
+    const seen = new Set();
+    const push = (u, ts) => {
+      const name = String(u || '').trim().replace(/^@/, '').toLowerCase();
+      if (!USERNAME.test(name) || seen.has(name)) return;
+      seen.add(name);
+      out.push({ u: name, ts: typeof ts === 'number' && ts > 0 ? (ts < 1e12 ? ts * 1000 : ts) : null });
+    };
+    const walk = (v, depth) => {
+      if (depth > 5 || v == null) return;
+      if (Array.isArray(v)) { v.forEach((x) => walk(x, depth + 1)); return; }
+      if (typeof v !== 'object') return;
+      if (Array.isArray(v.string_list_data)) { for (const d of v.string_list_data) if (d && typeof d.value === 'string') push(d.value, d.timestamp); return; }
+      if (typeof v.username === 'string') { push(v.username, v.timestamp); return; }
+      if (typeof v.u === 'string') { push(v.u, v.ts); return; }
+      Object.values(v).forEach((x) => walk(x, depth + 1));
+    };
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try { walk(JSON.parse(trimmed), 0); return out; } catch (e) { /* not JSON after all */ }
+    }
+    if (/<\s*(html|div|a)\b/i.test(trimmed)) {
+      // The HTML export: one link per account, the date in the text that follows it.
+      const re = /instagram\.com\/([A-Za-z0-9._]{1,30})\/?["'][^>]*>[^<]*<\/a>([\s\S]{0,200}?)(?=<a |$)/g;
+      let m;
+      while ((m = re.exec(trimmed))) {
+        const plain = m[2].replace(/<[^>]+>/g, ' ');
+        const found = plain.match(/[A-Z][a-z]{2} \d{1,2}, \d{4}[^,]*(?:,[^,]*)?/);
+        const date = found ? Date.parse(found[0].trim()) : NaN;
+        push(m[1], isNaN(date) ? null : date);
+      }
+      if (out.length) return out;
+    }
+    for (const u of parseUsernames(text)) push(u, null);
+    return out;
+  }
+  // Adds rows to the pending list without duplicates; the earlier date and any known id are kept.
+  function mergePending(pending, rows, now) {
+    const map = new Map();
+    for (const p of pending || []) if (p && typeof p.u === 'string') map.set(p.u, p);
+    let added = 0;
+    for (const r of rows || []) {
+      if (!r || typeof r.u !== 'string') continue;
+      const old = map.get(r.u);
+      if (!old) { map.set(r.u, { u: r.u, id: r.id || '', name: r.name || '', pic: r.pic || '', priv: r.priv !== false, ts: r.ts || now }); added++; continue; }
+      map.set(r.u, Object.assign({}, old, { id: old.id || r.id || '', name: old.name || r.name || '', pic: old.pic || r.pic || '', ts: Math.min(old.ts || now, r.ts || now) }));
+    }
+    return { pending: [...map.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)), added };
+  }
+
+  return { carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
 });
 
 ;
@@ -653,6 +745,38 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     cardFooter: 'made with Follow Check',
     showName: 'Show my username',
     cardFailed: 'Could not draw the card.',
+    preFollowsYou: 'Skipped: @{u} follows you now.',
+    preNotFollowing: 'Skipped: you already don’t follow @{u}.',
+    preLeft: 'Skipped: @{u} no longer follows you.',
+    preAlready: 'You already follow @{u}.',
+    preAccepted: '@{u} accepted your request.',
+    preGone: 'The request to @{u} is no longer pending.',
+    preUnknown: 'Could not confirm with Instagram first, so nothing was done.',
+    pendingBtn: 'Pending ({n})',
+    pendingTitle: 'Follow requests you sent that were not accepted',
+    pendingHint: 'Instagram’s site no longer lists the requests you sent. This list holds the requests sent from here, plus whatever you import from the pending_follow_requests file of Instagram’s “Download your information” export (JSON or HTML).',
+    pendingEmpty: 'No pending requests known. Import the export file, or send one from “you don’t follow back”.',
+    pendingChip: 'pending since {d}',
+    pendingStill: 'still pending',
+    stillPending: 'Still pending?',
+    stillPendingTitle: 'Asks Instagram whether this request is still waiting.',
+    cancelReq: 'Cancel request',
+    cancelTitle: 'Withdraws this follow request after a second tap. Same spacing and caps as Unfollow.',
+    toastReqCancelled: 'Request to @{u} cancelled',
+    cancelFailed: 'Cancel failed: {r}',
+    logBtn: 'Actions ({n})',
+    logTitle: 'Actions taken from here, newest first',
+    logEmpty: 'No actions yet. Unfollow, Follow back and Cancel request land here, each with an Undo.',
+    actUnfollow: 'unfollowed {d}',
+    actFollow: 'followed {d}',
+    actRequest: 'requested {d}',
+    actCancel: 'cancelled request {d}',
+    undone: 'undone {d}',
+    undo: 'Undo',
+    undoTitle: 'Does the opposite after a second tap, under the same limits.',
+    leftBackChip: 'unfollowed you {d}, back now',
+    nLeftBefore: '{n} unfollowed you before',
+    pillLeft: 'unfollowed you {d}',
   };
 
   const ar = {
@@ -847,6 +971,38 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     cardFooter: 'اتعمل بـ Follow Check',
     showName: 'اعرض اسمي',
     cardFailed: 'مقدرناش نرسم الكارت.',
+    preFollowsYou: 'اتلغى: @{u} بقى بيتابعك دلوقتي.',
+    preNotFollowing: 'اتلغى: إنت أصلاً مش بتتابع @{u}.',
+    preLeft: 'اتلغى: @{u} مابقاش بيتابعك.',
+    preAlready: 'إنت أصلاً بتتابع @{u}.',
+    preAccepted: '@{u} قبل طلبك.',
+    preGone: 'الطلب لـ @{u} مابقاش معلّق.',
+    preUnknown: 'مقدرناش نتأكد من إنستجرام الأول، فماتعملش حاجة.',
+    pendingBtn: 'المعلّقة ({n})',
+    pendingTitle: 'طلبات المتابعة اللي بعتّها ومحدش قبلها',
+    pendingHint: 'موقع إنستجرام مابقاش بيعرض الطلبات اللي بعتّها. القائمة دي فيها الطلبات اللي اتبعتت من هنا، وأي حاجة تستوردها من ملف pending_follow_requests في تنزيل بياناتك من إنستجرام (JSON أو HTML).',
+    pendingEmpty: 'مفيش طلبات معلّقة معروفة. استورد ملف التنزيل، أو ابعت طلب من "مش بتردلهم المتابعة".',
+    pendingChip: 'معلّق من {d}',
+    pendingStill: 'لسه معلّق',
+    stillPending: 'لسه معلّق؟',
+    stillPendingTitle: 'بيسأل إنستجرام لو الطلب ده لسه مستني.',
+    cancelReq: 'الغي الطلب',
+    cancelTitle: 'بيسحب طلب المتابعة ده بعد ضغطة تانية. نفس التباعد والحدود بتاعة إلغاء المتابعة.',
+    toastReqCancelled: 'الطلب لـ @{u} اتلغى',
+    cancelFailed: 'الإلغاء فشل: {r}',
+    logBtn: 'الأكشنات ({n})',
+    logTitle: 'الأكشنات اللي اتعملت من هنا، الأحدث الأول',
+    logEmpty: 'مفيش أكشنات لسه. إلغاء المتابعة والمتابعة وإلغاء الطلب بيتسجلوا هنا، وكل واحد ليه زرار رجّع.',
+    actUnfollow: 'ألغيت متابعته {d}',
+    actFollow: 'تابعته {d}',
+    actRequest: 'بعتله طلب {d}',
+    actCancel: 'ألغيت الطلب {d}',
+    undone: 'اترجّع {d}',
+    undo: 'رجّع',
+    undoTitle: 'بيعمل العكس بعد ضغطة تانية، بنفس الحدود.',
+    leftBackChip: 'سابك {d} ورجع',
+    nLeftBefore: '{n} سابوك قبل كده',
+    pillLeft: 'سابك {d}',
   };
 
   return { en, ar };
@@ -870,7 +1026,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, carryMe } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -995,6 +1151,9 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const histStoreKey = (uid) => 'fbc.hist.' + uid;
   const whiteStoreKey = (uid) => 'fbc.white.' + uid;
   const actStoreKey = (uid) => 'fbc.actions.' + uid;
+  const logStoreKey = (uid) => 'fbc.log.' + uid;
+  const pendStoreKey = (uid) => 'fbc.pending.' + uid;
+  const LOG_CAP = 500;
   const HIST_CAPS = { points: 400, events: 3000 };
 
   // --- Instagram requests
@@ -1149,7 +1308,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     changes: { label: 'tileHistory', title: 'titleHistory', empty: '' },
   };
   const freshActions = () => ({ times: [], pausedUntil: 0, warned: false });
-  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, left: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0 };
+  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], left: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0 };
   const live = { following: 0, followers: 0 };
   const ui = {};
   // Small preferences, remembered across visits: language, panel width, and the pause after Instagram asks us to slow down.
@@ -1239,7 +1398,9 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.copy = h('button', { class: 'btn small', type: 'button', onclick: () => copyList() });
     ui.download = h('button', { class: 'btn small', type: 'button', onclick: () => downloadCurrent() });
     ui.protectedBtn = h('button', { class: 'btn small', type: 'button', onclick: () => { state.tab = 'protected'; renderList(); } });
-    ui.toolbar = h('div', { class: 'toolbar' }, ui.search, ui.hideDoneWrap, ui.showProtectedWrap, ui.onlyLeftWrap, ui.kindFilter, ui.evFilter, ui.copy, ui.download, ui.protectedBtn, ui.share);
+    ui.pendingBtn = h('button', { class: 'btn small', type: 'button', onclick: () => { state.tab = 'pending'; renderList(); } });
+    ui.logBtn = h('button', { class: 'btn small', type: 'button', onclick: () => { state.tab = 'actions'; renderList(); } });
+    ui.toolbar = h('div', { class: 'toolbar' }, ui.search, ui.hideDoneWrap, ui.showProtectedWrap, ui.onlyLeftWrap, ui.kindFilter, ui.evFilter, ui.copy, ui.download, ui.protectedBtn, ui.pendingBtn, ui.logBtn, ui.share);
     ui.listTitle = h('div', { class: 'listtitle' });
     ui.chart = h('div', { class: 'charthost', hidden: true });
     // Protected accounts: paste, import, export, and the list itself.
@@ -1252,10 +1413,15 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.protList = h('div', { class: 'list' });
     ui.protEmpty = h('div', { class: 'empty', hidden: true });
     ui.prot = h('div', { class: 'prot', hidden: true }, ui.protHint, ui.protText, h('div', { class: 'toolbar' }, ui.protAdd, ui.protImport, ui.protExport, ui.protFile), ui.protList, ui.protEmpty);
+    // Pending requests: the hint, the export import, and the list itself.
+    ui.pendHint = h('div', { class: 'hint' });
+    ui.pendFile = h('input', { type: 'file', accept: '.json,.html,.htm,.txt,application/json,text/html,text/plain', hidden: true, onchange: () => importPendingFile() });
+    ui.pendImport = h('button', { class: 'btn small', type: 'button', onclick: () => ui.pendFile.click() });
+    ui.pend = h('div', { class: 'prot', hidden: true }, ui.pendHint, h('div', { class: 'toolbar' }, ui.pendImport, ui.pendFile));
     ui.list = h('div', { class: 'list' });
     ui.empty = h('div', { class: 'empty', hidden: true });
     ui.notice = h('div', { class: 'notice', hidden: true });
-    ui.results = h('div', { class: 'results', hidden: true }, ui.ledger, ui.notice, ui.tiles, ui.toolbar, ui.listTitle, ui.chart, ui.prot, ui.list);
+    ui.results = h('div', { class: 'results', hidden: true }, ui.ledger, ui.notice, ui.tiles, ui.toolbar, ui.listTitle, ui.chart, ui.prot, ui.pend, ui.list);
     ui.toast = h('div', { class: 'toast', role: 'status', hidden: true });
     ui.modalTitle = h('div', { class: 'mtitle' });
     ui.modalText = h('div', { class: 'mtext' });
@@ -1329,6 +1495,9 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.protText.placeholder = t('protectedPlaceholder');
     ui.protHint.textContent = t('protectedHint');
     updateProtectedBtn();
+    ui.pendHint.textContent = t('pendingHint');
+    ui.pendImport.textContent = t('importBtn');
+    updateSideBtns();
     ui.lbFull.textContent = t('lbFull');
     ui.lbSave.textContent = t('lbSave');
     ui.lbClose.textContent = t('close');
@@ -1608,6 +1777,41 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     }
   }
   function updateProtectedBtn() { ui.protectedBtn.textContent = t('protectedBtn', { n: num(Object.keys(state.white).length) }); }
+  function updateSideBtns() {
+    ui.pendingBtn.textContent = t('pendingBtn', { n: num(state.pending.length) });
+    ui.logBtn.textContent = t('logBtn', { n: num(state.log.filter((e) => !e.undone).length) });
+  }
+  function savePending() { if (state.uid) storageSet({ [pendStoreKey(state.uid)]: state.pending }); updateSideBtns(); }
+  function addLog(type, r, undoOf) {
+    const entry = { at: Date.now(), type, u: r.u, id: r.id || '', name: r.name || '', priv: !!r.priv, pic: r.pic || '' };
+    if (undoOf) entry.undoOf = undoOf.at;
+    state.log = appendLog(state.log, entry, LOG_CAP);
+    if (undoOf) state.log = markUndone(state.log, undoOf.at, undoOf.u, entry.at);
+    if (state.uid) storageSet({ [logStoreKey(state.uid)]: state.log });
+    updateSideBtns();
+  }
+  function addPending(rows) {
+    const m = mergePending(state.pending, rows, Date.now());
+    state.pending = m.pending;
+    savePending();
+    return m.added;
+  }
+  function removePending(u) {
+    state.pending = state.pending.filter((p) => p.u !== u);
+    savePending();
+  }
+  function importPendingFile() {
+    const f = ui.pendFile.files && ui.pendFile.files[0];
+    ui.pendFile.value = '';
+    if (!f) return;
+    f.text().then((text) => {
+      const rows = parsePending(text);
+      if (!rows.length) { toast(t('toastNothingToAdd')); return; }
+      const added = addPending(rows);
+      toast(added ? t('toastAdded', { n: num(added) }) : t('toastNothingToAdd'));
+      renderList();
+    }, () => toast(t('toastNothingToAdd')));
+  }
   // A yes/no box inside the panel (the viewer never shows window.confirm).
   function askConfirm(titleKey, textKey, okKey, vars) {
     return new Promise((resolve) => {
@@ -1722,7 +1926,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     setTile('notback', num(shown), t('subOfFollowing', { pct: pct(shown, nf) })
       + (leftN ? ' · ' + t('nLeft', { n: num(leftN) }) : '')
       + (protectedN ? ' · ' + t('nProtected', { n: num(protectedN) }) : ''));
-    setTile('fans', num(L.fans.length), t('subOfFollowers', { pct: pct(L.fans.length, nw) }));
+    const fansLeft = L.fans.filter((r) => state.left.has(r.u)).length;
+    setTile('fans', num(L.fans.length), t('subOfFollowers', { pct: pct(L.fans.length, nw) }) + (fansLeft ? ' · ' + t('nLeftBefore', { n: num(fansLeft) }) : ''));
     setTile('mutual', num(L.mutual.length), t('subOfFollowing', { pct: pct(L.mutual.length, nf) }));
     const pts = state.hist && Array.isArray(state.hist.points) ? state.hist.points : [];
     const lastAt = pts.length ? pts[pts.length - 1].at : 0;
@@ -1810,7 +2015,17 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     const profile = (u) => 'https://www.instagram.com/' + u + '/';
     if (state.tab === 'protected') { exportProtected(); return; }
     let rows, name;
-    if (state.tab === 'changes') {
+    if (state.tab === 'pending') {
+      const list = visible(state.pending);
+      if (!list.length) { toast(t('toastNothing')); return; }
+      rows = [['username', 'name', 'pending_since', 'profile']].concat(list.map((r) => [r.u, r.name || '', new Date(r.ts).toISOString(), profile(r.u)]));
+      name = 'follow-check-pending.csv';
+    } else if (state.tab === 'actions') {
+      const list = visible(state.log);
+      if (!list.length) { toast(t('toastNothing')); return; }
+      rows = [['date', 'action', 'username', 'name', 'undone', 'profile']].concat(list.map((e) => [new Date(e.at).toISOString(), e.type, e.u, e.name || '', e.undone ? new Date(e.undone).toISOString() : '', profile(e.u)]));
+      name = 'follow-check-actions.csv';
+    } else if (state.tab === 'changes') {
       const evs = filteredEvents();
       if (!evs.length) { toast(t('toastNothing')); return; }
       rows = [['date', 'event', 'username', 'name', 'profile']].concat(evs.map((e) => [new Date(e.at).toISOString(), e.type, e.u, e.name || '', profile(e.u)]));
@@ -1851,7 +2066,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       r.name ? h('div', { class: 'name', title: r.name }, r.name) : null));
     if (r.ver) row.append(h('span', { class: 'tag ver' }, t('verifiedTag')));
     if (r.priv) row.append(h('span', { class: 'tag' }, t('privateTag')));
-    if (withCheck && state.tab === 'notback' && state.left.has(r.u)) row.append(h('span', { class: 'chip warn' }, t('leftChip', { d: fmtMD(state.left.get(r.u)) })));
+    if (state.tab !== 'changes' && state.left.has(r.u)) {
+      const stillFollowsYou = !!(state.snap && state.snap.followers.some((x) => x.u === r.u));
+      row.append(h('span', { class: 'chip warn' }, t(stillFollowsYou ? 'leftBackChip' : 'leftChip', { d: fmtMD(state.left.get(r.u)) })));
+    }
     if (withCheck && state.tab === 'notback' && r.id) {
       // Two taps within four seconds: the first arms the button, the second unfollows.
       const ub = h('button', { class: 'unf', type: 'button', title: t('unfollowTitle') }, t('unfollow'));
@@ -1928,7 +2146,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   function listRows() {
     let rows = visible(state.lists[state.tab]);
     if (state.tab === 'notback' && !state.showProtected) rows = rows.filter((r) => !isProtected(r.u));
-    if (state.tab === 'notback' && state.onlyLeft) rows = rows.filter((r) => state.left.has(r.u));
+    if ((state.tab === 'notback' || state.tab === 'fans') && state.onlyLeft) rows = rows.filter((r) => state.left.has(r.u));
     if (state.hideDone) rows = rows.filter((r) => !isDone(r.u));
     if (state.kind !== 'all') rows = rows.filter((r) => matchesKind(r, state.kind));
     return rows.slice().sort((a, b) => (a.u < b.u ? -1 : a.u > b.u ? 1 : 0));
@@ -1946,24 +2164,74 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.protEmpty.hidden = names.length !== 0;
     ui.protEmpty.textContent = t('protectedEmpty');
   }
+  // One row per request you sent: when, a live "still pending?" check, and a cancel under the action limits.
+  function renderPending() {
+    const rows = visible(state.pending);
+    ui.listTitle.textContent = t('pendingTitle') + (state.pending.length ? ' · ' + num(state.pending.length) : '');
+    for (const p of rows) {
+      const rec = Object.assign({ u: p.u, name: '', priv: true, ver: false, pic: '' }, lookupRecord(p.u) || {}, p);
+      const row = rowNode(rec, false);
+      row.append(h('span', { class: 'chip' }, t('pendingChip', { d: fmtMD(p.ts) })));
+      const sb = h('button', { class: 'verify', type: 'button', title: t('stillPendingTitle') }, t('stillPending'));
+      sb.addEventListener('click', () => checkPendingRow(p, row, sb));
+      row.append(sb);
+      row.append(armedButton('unf', t('cancelReq'), t('cancelTitle'), (btn) => cancelRow(p, row, btn)));
+      ui.list.append(row);
+    }
+    ui.list.hidden = rows.length === 0;
+    ui.empty.hidden = rows.length !== 0;
+    if (!rows.length) ui.empty.textContent = state.pending.length ? t('noMatch', { q: state.q.trim() }) : t('pendingEmpty');
+  }
+  const ACT_KEY = { unfollow: 'actUnfollow', follow: 'actFollow', request: 'actRequest', cancel: 'actCancel' };
+  function renderActions() {
+    const rows = visible(state.log).slice().reverse();
+    ui.listTitle.textContent = t('logTitle') + (state.log.length ? ' · ' + num(state.log.length) : '');
+    for (const e of rows) {
+      const row = rowNode(Object.assign({ u: e.u, name: e.name, priv: e.priv, ver: false, pic: e.pic || '', id: e.id }, lookupRecord(e.u) || {}, { id: e.id || (lookupRecord(e.u) || {}).id || '' }), false);
+      row.append(h('span', { class: 'chip ' + (e.type === 'unfollow' || e.type === 'cancel' ? 'warn' : 'good') }, t(ACT_KEY[e.type] || 'actFollow', { d: fmtWhen(e.at) })));
+      if (e.undone) row.append(h('span', { class: 'chip muted' }, t('undone', { d: fmtWhen(e.undone) })));
+      else if (UNDO[e.type]) row.append(armedButton('unf undo', t('undo'), t('undoTitle'), (btn) => undoRow(e, row, btn)));
+      ui.list.append(row);
+    }
+    ui.list.hidden = rows.length === 0;
+    ui.empty.hidden = rows.length !== 0;
+    if (!rows.length) ui.empty.textContent = state.log.length ? t('noMatch', { q: state.q.trim() }) : t('logEmpty');
+  }
+  // A button that needs two taps within four seconds: the first arms it, the second runs the action.
+  function armedButton(cls, label, title, run) {
+    const b = h('button', { class: cls, type: 'button', title }, label);
+    let armed = 0;
+    b.addEventListener('click', () => {
+      if (armed && Date.now() - armed < 4000) { armed = 0; b.classList.remove('arm'); b.textContent = label; run(b); return; }
+      armed = Date.now();
+      b.classList.add('arm');
+      b.textContent = t('unfollowConfirm');
+      setTimeout(() => { if (armed && Date.now() - armed >= 3900) { armed = 0; b.classList.remove('arm'); b.textContent = label; } }, 4000);
+    });
+    return b;
+  }
   function renderList() {
     for (const el of ui.tiles.children) el.setAttribute('aria-selected', String(el.dataset.tab === state.tab));
     ui.list.replaceChildren();
     if (!state.lists) return;
-    const history = state.tab === 'changes', prot = state.tab === 'protected';
+    const history = state.tab === 'changes', prot = state.tab === 'protected', pend = state.tab === 'pending', acts = state.tab === 'actions';
+    const side = prot || pend || acts;
     ui.chart.hidden = !history;
     ui.evFilter.hidden = !history;
-    ui.hideDoneWrap.hidden = history || prot;
-    ui.kindFilter.hidden = history || prot;
+    ui.hideDoneWrap.hidden = history || side;
+    ui.kindFilter.hidden = history || side;
     ui.showProtectedWrap.hidden = state.tab !== 'notback';
-    const leftRows = whoLeft(state.lists.notback.filter((r) => !isProtected(r.u)), state.left);
-    ui.onlyLeftWrap.hidden = state.tab !== 'notback' || !leftRows.length;
+    const leftRows = state.tab === 'fans' ? state.lists.fans.filter((r) => state.left.has(r.u)) : whoLeft(state.lists.notback.filter((r) => !isProtected(r.u)), state.left);
+    ui.onlyLeftWrap.hidden = (state.tab !== 'notback' && state.tab !== 'fans') || !leftRows.length;
     if (ui.onlyLeftWrap.hidden && state.onlyLeft) { state.onlyLeft = false; ui.onlyLeft.checked = false; } // a hidden filter must not keep filtering
-    ui.share.hidden = prot;
+    ui.share.hidden = side;
     ui.prot.hidden = !prot;
+    ui.pend.hidden = !pend;
     ui.list.hidden = prot;
     ui.empty.hidden = true;
     if (prot) { renderProtected(); return; }
+    if (pend) { renderPending(); return; }
+    if (acts) { renderActions(); return; }
     if (history) { renderHistory(); return; }
     const all = state.lists[state.tab];
     const base = state.tab === 'notback' ? all.filter((r) => !isProtected(r.u)) : all;
@@ -2130,6 +2398,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     if (!state.lists) return [];
     if (state.tab === 'changes') return [...new Set(filteredEvents().map((e) => e.u))];
     if (state.tab === 'protected') return Object.keys(state.white).sort();
+    if (state.tab === 'pending') return visible(state.pending).map((r) => r.u);
+    if (state.tab === 'actions') return [...new Set(visible(state.log).map((e) => e.u))];
     return listRows().map((r) => r.u);
   }
   function copyList() {
@@ -2210,12 +2480,13 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   async function loadAccount(uid) {
     const seq = ++loadSeq;
     state.uid = uid;
-    state.snap = null; state.prev = null; state.done = {}; state.white = {}; state.actions = freshActions(); state.lists = null; state.hist = null;
+    state.snap = null; state.prev = null; state.done = {}; state.white = {}; state.actions = freshActions(); state.lists = null; state.hist = null; state.log = []; state.pending = [];
     state.tab = 'notback';
     updateProtectedBtn();
+    updateSideBtns();
     applySnapshot();
     if (!uid) return;
-    const r = await storageGet([acctStoreKey(uid), doneStoreKey(uid), histStoreKey(uid), whiteStoreKey(uid), actStoreKey(uid), 'fbc', 'fbcDone']);
+    const r = await storageGet([acctStoreKey(uid), doneStoreKey(uid), histStoreKey(uid), whiteStoreKey(uid), actStoreKey(uid), logStoreKey(uid), pendStoreKey(uid), 'fbc', 'fbcDone']);
     if (seq !== loadSeq) return; // another account took over while loading
     let acct = r[acctStoreKey(uid)];
     let done = r[doneStoreKey(uid)];
@@ -2232,6 +2503,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     updateProtectedBtn();
     const act = r[actStoreKey(uid)];
     state.actions = act && typeof act === 'object' && Array.isArray(act.times) ? { times: act.times, pausedUntil: Number(act.pausedUntil) || 0, warned: !!act.warned } : freshActions();
+    const rawLog = r[logStoreKey(uid)];
+    state.log = Array.isArray(rawLog) ? rawLog.filter((e) => e && typeof e.at === 'number' && typeof e.u === 'string').slice(-LOG_CAP) : [];
+    state.pending = mergePending([], Array.isArray(r[pendStoreKey(uid)]) ? r[pendStoreKey(uid)] : [], Date.now()).pending;
+    updateSideBtns();
     const hist = r[histStoreKey(uid)];
     if (hist && Array.isArray(hist.points) && Array.isArray(hist.events)) {
       state.hist = hist;
@@ -2317,11 +2592,12 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     if (rel.self) { ui.rel.hidden = true; return; }
     const d = describeRel(rel);
     ui.relDot.classList.add(d.tone);
+    const left = state.left.has(username) ? ' · ' + t('pillLeft', { d: fmtMD(state.left.get(username)) }) : '';
     if (rel.stale) {
-      ui.relText.textContent = t('pillAsOf', { text: t(d.key), when: fmtWhen(rel.stale) });
+      ui.relText.textContent = t('pillAsOf', { text: t(d.key), when: fmtWhen(rel.stale) }) + left;
       if (!note) ui.rel.title = t('pillTitleLast');
     } else {
-      ui.relText.textContent = t(d.key);
+      ui.relText.textContent = t(d.key) + left;
       if (!note) ui.rel.title = t('pillTitleLive');
     }
   }
@@ -2454,12 +2730,46 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     if (st && typeof st.following === 'boolean') confirmed = true;
     if (!confirmed) throw new Error(t('unfollowUnconfirmed'));
   }
+  // One friendships/show request right before an action, so a days-old list cannot cause a wrong one.
+  // Resolves to the verdict; anything but 'go' has already been explained to the user and applied to the lists.
+  async function preflight(kind, r) {
+    if (!r.id) throw new Error('no account id');
+    let st = null;
+    try { st = await igGet(API.friendship(encodeURIComponent(r.id))); } catch (e) { if (e instanceof AuthError || e instanceof RateLimited) throw e; st = null; }
+    const v = preCheck(kind, st);
+    if (v === 'go') return v;
+    if (v === 'follows_you') { recordFollower(r, true); toast(t('preFollowsYou', { u: r.u })); }
+    else if (v === 'not_following') { recordUnfollow(r, true); toast(t('preNotFollowing', { u: r.u })); }
+    else if (v === 'left') { recordFollower(r, false); toast(t('preLeft', { u: r.u })); }
+    else if (v === 'already') { recordFollow(r, true); toast(t('preAlready', { u: r.u })); }
+    else if (v === 'requested') { addPending([{ u: r.u, id: r.id, name: r.name, pic: r.pic }]); toast(t('toastRequested', { u: r.u })); }
+    else if (v === 'accepted') { recordFollow(r, true); removePending(r.u); toast(t('preAccepted', { u: r.u })); }
+    else if (v === 'gone') { removePending(r.u); toast(t('preGone', { u: r.u })); }
+    else toast(t('preUnknown'));
+    return v;
+  }
+  // Adds or drops one account in the followers list after Instagram said so, with a history event.
+  function recordFollower(r, followsYou) {
+    const snap = state.snap;
+    if (!snap) return;
+    const has = snap.followers.some((x) => x.u === r.u);
+    if (followsYou === has) return;
+    if (followsYou) snap.followers.push({ u: r.u, id: r.id, name: r.name || '', priv: !!r.priv, ver: !!r.ver, pic: r.pic || '' });
+    else snap.followers = snap.followers.filter((x) => x.u !== r.u);
+    state.hist = appendHistory(state.hist, pointFrom(snap), [{ at: Date.now(), type: followsYou ? 'gained' : 'lost', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
+    state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
+    state.left = lostSince(state.hist.events);
+    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
+    ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
+    applyTiles();
+  }
   // Keeps the lists and the history honest after an unfollow, without another full check.
-  function recordUnfollow(r) {
+  // silent: Instagram said you already do not follow, so there is no event to record.
+  function recordUnfollow(r, silent) {
     const snap = state.snap;
     if (!snap) return;
     snap.following = snap.following.filter((x) => x.u !== r.u);
-    state.hist = appendHistory(state.hist, pointFrom(snap), [{ at: Date.now(), type: 'you_unfollowed', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
+    state.hist = appendHistory(state.hist, pointFrom(snap), silent ? [] : [{ at: Date.now(), type: 'you_unfollowed', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
     state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
     if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
@@ -2489,11 +2799,11 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     if (a.data && a.data.result === 'requested') return 'requested';
     throw new Error(t('followUnconfirmed'));
   }
-  function recordFollow(r) {
+  function recordFollow(r, silent) {
     const snap = state.snap;
     if (!snap || snap.following.some((x) => x.u === r.u)) return;
     snap.following.push({ u: r.u, id: r.id, name: r.name || '', priv: !!r.priv, ver: !!r.ver, pic: r.pic || '' });
-    state.hist = appendHistory(state.hist, pointFrom(snap), [{ at: Date.now(), type: 'you_followed', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
+    state.hist = appendHistory(state.hist, pointFrom(snap), silent ? [] : [{ at: Date.now(), type: 'you_followed', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
     state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
     if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
@@ -2514,14 +2824,18 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     btn.disabled = true;
     btn.textContent = t('pillChecking');
     try {
+      if (await preflight('follow', r) !== 'go') { renderList(); return; }
       const outcome = await followRequest(r);
       state.actions.times.push(Date.now());
       saveActions();
       if (outcome === 'following') {
+        addLog('follow', r);
         recordFollow(r);
         toast(t('toastFollowed', { u: r.u }));
         renderList();
       } else {
+        addLog('request', r);
+        addPending([{ u: r.u, id: r.id, name: r.name, pic: r.pic, priv: r.priv }]);
         btn.remove();
         row.append(h('span', { class: 'chip live' }, t('liveYouRequested')));
         toast(t('toastRequested', { u: r.u }));
@@ -2553,9 +2867,11 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     btn.disabled = true;
     btn.textContent = t('pillChecking');
     try {
+      if (await preflight('unfollow', r) !== 'go') { renderList(); return; }
       await unfollowRequest(r);
       state.actions.times.push(Date.now());
       saveActions();
+      addLog('unfollow', r);
       recordUnfollow(r);
       toast(t('toastUnfollowed', { u: r.u }));
       renderList();
@@ -2570,6 +2886,99 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       btn.disabled = false;
       btn.textContent = t('unfollow');
     }
+  }
+  // Withdraws one follow request; the same route the site uses, confirmed with friendships/show.
+  async function cancelRequest(r) {
+    const base = { 'x-csrftoken': cookie('csrftoken'), 'x-ig-app-id': API.appId, 'x-asbd-id': API.asbdId, 'x-requested-with': 'XMLHttpRequest' };
+    const a = await postForm('/api/v1/friendships/destroy/' + encodeURIComponent(r.id) + '/', base, { container_module: 'profile', user_id: r.id });
+    const verdict = judgeAction(a.status, a.data);
+    if (verdict === 'blocked') throw new ActionBlocked('blocked');
+    if (verdict !== 'ok') throw new Error('HTTP ' + a.status);
+    let st = null;
+    try { st = await igGet(API.friendship(encodeURIComponent(r.id))); } catch (e) { if (e instanceof AuthError) throw e; st = null; }
+    if (st && (st.outgoing_request === true || st.following === true)) throw new Error(t('unfollowStill'));
+    const fs = a.data && a.data.friendship_status;
+    if (!st && !(fs && fs.outgoing_request === false)) throw new Error(t('unfollowUnconfirmed'));
+  }
+  // The id of a pending account, looked up once when the import did not carry it.
+  async function resolveId(p) {
+    if (p.id) return p.id;
+    const rel = await fetchRelationship(p.u);
+    if (!rel.id) throw new Error('no account id');
+    p.id = rel.id;
+    savePending();
+    return p.id;
+  }
+  async function checkPendingRow(p, row, btn) {
+    if (btn.disabled) return;
+    if (Date.now() < state.cooldownUntil) { toast(t('pillPaused', { t: fmtT(state.cooldownUntil) })); return; }
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = t('pillChecking');
+    try {
+      await resolveId(p);
+      const v = await preflight('cancel', p);
+      if (v === 'go') {
+        let chip = row.querySelector('.chip.live');
+        if (!chip) { chip = h('span', { class: 'chip live' }); row.append(chip); }
+        chip.textContent = t('pendingStill');
+      } else if (v !== 'unknown') renderList();
+    } catch (e) {
+      if (e instanceof RateLimited) { state.cooldownUntil = Date.now() + REL_COOLDOWN_MS; saveUi(); }
+      toast(t('liveFailed', { r: e && e.message ? e.message : String(e) }));
+    } finally {
+      btn.textContent = label;
+      btn.disabled = false;
+    }
+  }
+  // Runs one write action under the shared limits: the warning once, the blocker, then the pre-check, the request and the log.
+  async function runAction(kind, r, btn, label, undoOf) {
+    if (!state.actions.warned) {
+      const ok = await askConfirm('unfollowWarnTitle', 'unfollowWarn', 'unfollowWarnOk', { h: ACT.perHour, d: ACT.perDay });
+      if (!ok) return false;
+      state.actions.warned = true;
+      saveActions();
+    }
+    const why = unfollowBlocker();
+    if (why) { toast(why); return false; }
+    if (state.running) { toast(t('unfollowBusy')); return false; }
+    btn.disabled = true;
+    btn.textContent = t('pillChecking');
+    try {
+      if (kind === 'cancel') await resolveId(r);
+      if (await preflight(kind, r) !== 'go') { renderList(); return false; }
+      let logged = kind;
+      if (kind === 'cancel') { await cancelRequest(r); removePending(r.u); toast(t('toastReqCancelled', { u: r.u })); }
+      else if (kind === 'unfollow') { await unfollowRequest(r); recordUnfollow(r); toast(t('toastUnfollowed', { u: r.u })); }
+      else {
+        const outcome = await followRequest(r);
+        if (outcome === 'following') { recordFollow(r); toast(t('toastFollowed', { u: r.u })); }
+        else { logged = 'request'; addPending([{ u: r.u, id: r.id, name: r.name, pic: r.pic, priv: r.priv }]); toast(t('toastRequested', { u: r.u })); }
+      }
+      state.actions.times.push(Date.now());
+      saveActions();
+      addLog(logged, r, undoOf);
+      renderList();
+      return true;
+    } catch (e) {
+      if (e instanceof ActionBlocked || e instanceof RateLimited) {
+        state.actions.pausedUntil = Date.now() + (e instanceof ActionBlocked ? ACT.blockPauseMs : ACT.rateLimitPauseMs);
+        saveActions();
+        toast(t('unfollowBlocked', { t: fmtT(state.actions.pausedUntil) }));
+      } else {
+        toast(t(kind === 'cancel' ? 'cancelFailed' : kind === 'unfollow' ? 'unfollowFailed' : 'followFailed', { r: e && e.message ? e.message : String(e) }));
+      }
+      btn.disabled = false;
+      btn.textContent = label;
+      return false;
+    }
+  }
+  function cancelRow(p, row, btn) { return runAction('cancel', p, btn, t('cancelReq')); }
+  // Undo does the opposite action for the account in the log entry, and records both sides.
+  function undoRow(e, row, btn) {
+    const rec = Object.assign({ u: e.u, id: e.id, name: e.name, priv: e.priv, pic: e.pic }, lookupRecord(e.u) || {}, e.id ? { id: e.id } : {});
+    if (!rec.id) { toast(t('preUnknown')); return; }
+    return runAction(UNDO[e.type], rec, btn, t('undo'), e);
   }
   function watchProfile() {
     const path = location.pathname;

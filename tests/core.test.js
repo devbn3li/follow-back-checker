@@ -224,3 +224,59 @@ test('carryMe keeps the username when the account-info request failed', () => {
   assert.equal(core.carryMe({ uid: '1', me: '' }, { uid: '2', me: 'other' }), '', 'never borrow another account’s name');
   assert.equal(core.carryMe({ uid: '1', me: '' }, null), '');
 });
+
+test('preCheck reads a friendship answer before an action', () => {
+  const p = core.preCheck;
+  assert.equal(p('unfollow', { following: true, followed_by: true }), 'follows_you');
+  assert.equal(p('unfollow', { following: false, followed_by: false }), 'not_following');
+  assert.equal(p('unfollow', { following: true, followed_by: false }), 'go');
+  assert.equal(p('unfollow', null), 'unknown');
+  assert.equal(p('unfollow', { status: 'ok' }), 'unknown');
+  assert.equal(p('follow', { following: false, followed_by: false }), 'left');
+  assert.equal(p('follow', { following: true, followed_by: true }), 'already');
+  assert.equal(p('follow', { following: false, followed_by: true, outgoing_request: true }), 'requested');
+  assert.equal(p('follow', { following: false, followed_by: true }), 'go');
+  assert.equal(p('cancel', { following: true, followed_by: false }), 'accepted');
+  assert.equal(p('cancel', { following: false, outgoing_request: true }), 'go');
+  assert.equal(p('cancel', { following: false, outgoing_request: false }), 'gone');
+  assert.equal(p('cancel', { following: false }), 'unknown');
+});
+
+test('appendLog caps and drops junk, markUndone flags one entry, UNDO pairs actions', () => {
+  let log = core.appendLog(null, { at: 1, u: 'a', type: 'unfollow' }, 3);
+  log = core.appendLog(log.concat([null, { u: 'x' }]), { at: 2, u: 'b', type: 'follow' }, 3);
+  log = core.appendLog(log, { at: 3, u: 'c', type: 'request' }, 3);
+  log = core.appendLog(log, { at: 4, u: 'd', type: 'cancel' }, 3);
+  assert.deepEqual(log.map((e) => e.u), ['b', 'c', 'd'], 'oldest dropped at the cap, junk ignored');
+  const marked = core.markUndone(log, 3, 'c', 99);
+  assert.equal(marked[1].undone, 99);
+  assert.equal(marked[0].undone, undefined);
+  assert.deepEqual(core.UNDO, { unfollow: 'follow', follow: 'unfollow', request: 'cancel', cancel: 'follow' });
+});
+
+test('parsePending reads the export JSON, its HTML page and plain lists', () => {
+  const json = JSON.stringify({ relationships_follow_requests_sent: [
+    { title: '', string_list_data: [{ href: 'https://www.instagram.com/Some.One', value: 'Some.One', timestamp: 1700000000 }] },
+    { title: '', string_list_data: [{ href: 'https://www.instagram.com/other', value: 'other', timestamp: 1700000500 }] },
+    { title: '', string_list_data: [{ value: 'some.one', timestamp: 1 }] },
+  ] });
+  assert.deepEqual(core.parsePending(json), [{ u: 'some.one', ts: 1700000000000 }, { u: 'other', ts: 1700000500000 }]);
+  const html = '<html><body><div><a href="https://www.instagram.com/first_one/">first_one</a><div>Nov 14, 2023, 10:13 PM</div></div><div><a href="https://www.instagram.com/second">second</a><div>no date here</div></div></body></html>';
+  const fromHtml = core.parsePending(html);
+  assert.deepEqual(fromHtml.map((r) => r.u), ['first_one', 'second']);
+  assert.equal(fromHtml[0].ts, Date.parse('Nov 14, 2023, 10:13 PM'));
+  assert.equal(fromHtml[1].ts, null);
+  assert.deepEqual(core.parsePending('@alpha, beta\nbad-name!'), [{ u: 'alpha', ts: null }, { u: 'beta', ts: null }]);
+  assert.deepEqual(core.parsePending(''), []);
+});
+
+test('mergePending keeps one row per account with the earliest date and any known id', () => {
+  const now = 5000;
+  const first = core.mergePending([], [{ u: 'a', ts: 3000 }, { u: 'b', ts: null }], now);
+  assert.equal(first.added, 2);
+  assert.deepEqual(first.pending.map((r) => [r.u, r.ts]), [['a', 3000], ['b', 5000]]);
+  const second = core.mergePending(first.pending, [{ u: 'a', ts: 1000, id: '9', name: 'A' }, { u: 'a', ts: 4000 }], now);
+  assert.equal(second.added, 0);
+  assert.deepEqual(second.pending[0], { u: 'a', id: '9', name: 'A', pic: '', priv: true, ts: 1000 });
+  assert.equal(second.pending.length, 2);
+});

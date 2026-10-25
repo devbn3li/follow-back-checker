@@ -232,5 +232,93 @@
     return '';
   }
 
-  return { carryMe, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
+  // What a friendships/show answer says about an action that is about to run. 'go' means do it;
+  // anything else is a reason to stop, and 'unknown' means the answer could not be read.
+  function preCheck(kind, st) {
+    const known = st && typeof st === 'object' && (typeof st.following === 'boolean' || typeof st.followed_by === 'boolean');
+    if (!known) return 'unknown';
+    if (kind === 'unfollow') {
+      if (st.followed_by === true) return 'follows_you';
+      if (st.following === false) return 'not_following';
+      return st.following === true ? 'go' : 'unknown';
+    }
+    if (kind === 'follow') {
+      if (st.followed_by === false) return 'left';
+      if (st.following === true) return 'already';
+      if (st.outgoing_request === true) return 'requested';
+      return 'go';
+    }
+    if (kind === 'cancel') {
+      if (st.following === true) return 'accepted';
+      if (st.outgoing_request === true) return 'go';
+      return st.outgoing_request === false ? 'gone' : 'unknown';
+    }
+    return 'unknown';
+  }
+
+  // The log of actions taken from the tool: newest last, capped.
+  const UNDO = { unfollow: 'follow', follow: 'unfollow', request: 'cancel', cancel: 'follow' };
+  function appendLog(log, entry, cap) {
+    const base = Array.isArray(log) ? log.filter((e) => e && typeof e.at === 'number' && typeof e.u === 'string') : [];
+    return base.concat([entry]).slice(-(cap || 500));
+  }
+  function markUndone(log, at, u, when) {
+    return (log || []).map((e) => (e && e.at === at && e.u === u ? Object.assign({}, e, { undone: when }) : e));
+  }
+
+  // Follow requests you sent, out of Instagram's export (pending_follow_requests.json or its HTML
+  // page) or any list of usernames. Each row: { u, ts } with ts in ms or null.
+  function parsePending(input) {
+    const text = String(input || '');
+    const trimmed = text.trim();
+    const out = [];
+    const seen = new Set();
+    const push = (u, ts) => {
+      const name = String(u || '').trim().replace(/^@/, '').toLowerCase();
+      if (!USERNAME.test(name) || seen.has(name)) return;
+      seen.add(name);
+      out.push({ u: name, ts: typeof ts === 'number' && ts > 0 ? (ts < 1e12 ? ts * 1000 : ts) : null });
+    };
+    const walk = (v, depth) => {
+      if (depth > 5 || v == null) return;
+      if (Array.isArray(v)) { v.forEach((x) => walk(x, depth + 1)); return; }
+      if (typeof v !== 'object') return;
+      if (Array.isArray(v.string_list_data)) { for (const d of v.string_list_data) if (d && typeof d.value === 'string') push(d.value, d.timestamp); return; }
+      if (typeof v.username === 'string') { push(v.username, v.timestamp); return; }
+      if (typeof v.u === 'string') { push(v.u, v.ts); return; }
+      Object.values(v).forEach((x) => walk(x, depth + 1));
+    };
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try { walk(JSON.parse(trimmed), 0); return out; } catch (e) { /* not JSON after all */ }
+    }
+    if (/<\s*(html|div|a)\b/i.test(trimmed)) {
+      // The HTML export: one link per account, the date in the text that follows it.
+      const re = /instagram\.com\/([A-Za-z0-9._]{1,30})\/?["'][^>]*>[^<]*<\/a>([\s\S]{0,200}?)(?=<a |$)/g;
+      let m;
+      while ((m = re.exec(trimmed))) {
+        const plain = m[2].replace(/<[^>]+>/g, ' ');
+        const found = plain.match(/[A-Z][a-z]{2} \d{1,2}, \d{4}[^,]*(?:,[^,]*)?/);
+        const date = found ? Date.parse(found[0].trim()) : NaN;
+        push(m[1], isNaN(date) ? null : date);
+      }
+      if (out.length) return out;
+    }
+    for (const u of parseUsernames(text)) push(u, null);
+    return out;
+  }
+  // Adds rows to the pending list without duplicates; the earlier date and any known id are kept.
+  function mergePending(pending, rows, now) {
+    const map = new Map();
+    for (const p of pending || []) if (p && typeof p.u === 'string') map.set(p.u, p);
+    let added = 0;
+    for (const r of rows || []) {
+      if (!r || typeof r.u !== 'string') continue;
+      const old = map.get(r.u);
+      if (!old) { map.set(r.u, { u: r.u, id: r.id || '', name: r.name || '', pic: r.pic || '', priv: r.priv !== false, ts: r.ts || now }); added++; continue; }
+      map.set(r.u, Object.assign({}, old, { id: old.id || r.id || '', name: old.name || r.name || '', pic: old.pic || r.pic || '', ts: Math.min(old.ts || now, r.ts || now) }));
+    }
+    return { pending: [...map.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)), added };
+  }
+
+  return { carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
 });
