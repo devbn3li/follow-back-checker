@@ -2233,7 +2233,8 @@
     if (!s) return null;
     if (s.before) return h('div', { class: 'since', title: t('sinceApprox') }, t('sinceBefore', { d: fmtD(s.at) }));
     const days = Math.max(0, Math.round((Date.now() - s.at) / 86400000));
-    return h('div', { class: 'since', title: t(s.exact ? 'sinceExact' : 'sinceApprox') }, t(list === 'followers' ? 'sinceFollowsYou' : 'sinceFollowing', { d: fmtD(s.at), n: num(days) }));
+    const d = s.exact && days === 0 ? fmtDT(s.at) : fmtD(s.at); // an exact date from today reads as a time
+    return h('div', { class: 'since', title: t(s.exact ? 'sinceExact' : 'sinceApprox') }, t(list === 'followers' ? 'sinceFollowsYou' : 'sinceFollowing', { d, n: num(days) }) + (s.exact ? ' · ' + t('exactTag') : ''));
   }
   function updateDatesStatus() {
     const d = state.dates;
