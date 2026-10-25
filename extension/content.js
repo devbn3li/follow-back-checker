@@ -15,7 +15,7 @@
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipText, shouldAutoCheck, autoCheckDefault, parseRelease } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipText, shouldAutoCheck, autoCheckDefault, parseRelease, pickExportEntry } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -424,7 +424,7 @@
     ui.prot = h('div', { class: 'prot', hidden: true }, ui.protHint, ui.protText, h('div', { class: 'toolbar' }, ui.protAdd, ui.protImport, ui.protExport, ui.protFile), ui.protList, ui.protEmpty);
     // Pending requests: the hint, the export import, and the list itself.
     ui.pendHint = h('div', { class: 'hint' });
-    ui.pendFile = h('input', { type: 'file', accept: '.json,.html,.htm,.txt,application/json,text/html,text/plain', hidden: true, onchange: () => importPendingFile() });
+    ui.pendFile = h('input', { type: 'file', accept: '.zip,.json,.html,.htm,.txt,application/zip,application/x-zip-compressed,application/json,text/html,text/plain', hidden: true, onchange: () => importPendingFile() });
     ui.pendImport = h('button', { class: 'btn small', type: 'button', onclick: () => ui.pendFile.click() });
     ui.pend = h('div', { class: 'prot', hidden: true }, ui.pendHint, h('div', { class: 'toolbar' }, ui.pendImport, ui.pendFile));
     // Settings: the automatic check, the app's reminder, and the export import for exact follow dates.
@@ -854,17 +854,48 @@
     state.pending = state.pending.filter((p) => p.u !== u);
     savePending();
   }
-  function importPendingFile() {
+  // The export zip as downloaded, or one of its files. From the zip: the pending requests, and the
+  // recently unfollowed profiles as history events so the followed-again flag knows about them.
+  async function importPendingFile() {
     const f = ui.pendFile.files && ui.pendFile.files[0];
     ui.pendFile.value = '';
     if (!f) return;
-    f.text().then((text) => {
+    try {
+      let text = '', unfollowedText = '';
+      const head = new Uint8Array(await f.slice(0, 2).arrayBuffer());
+      if (head[0] === 0x50 && head[1] === 0x4b) {
+        if (typeof DecompressionStream !== 'function') { toast(t('toastZipOld')); return; }
+        const files = await readExportZip(f, (entries) => [pickExportEntry(entries, 'pending_follow_requests'), pickExportEntry(entries, 'recently_unfollowed_profiles')].filter(Boolean));
+        const pend = (files || []).find((x) => /pending_follow_requests/i.test(x.name));
+        if (!pend) { toast(t('zipNoPending')); return; }
+        text = pend.text;
+        const unf = files.find((x) => /recently_unfollowed_profiles/i.test(x.name));
+        if (unf) unfollowedText = unf.text;
+      } else {
+        text = await f.text();
+      }
       const rows = parsePending(text);
       if (!rows.length) { toast(t('toastNothingToAdd')); return; }
       const added = addPending(rows);
-      toast(added ? t('toastAdded', { n: num(added) }) : t('toastNothingToAdd'));
+      const unfollowed = unfollowedText ? importUnfollowed(parsePending(unfollowedText)) : 0;
+      toast((added ? t('toastAdded', { n: num(added) }) : t('toastNothingToAdd')) + (unfollowed ? ' · ' + t('toastUnfollowedImported', { n: num(unfollowed) }) : ''));
       renderList();
-    }, () => toast(t('toastNothingToAdd')));
+    } catch (e) {
+      toast(t('liveFailed', { r: e && e.message ? e.message : String(e) }));
+    }
+  }
+  // "you unfollowed" events from the export that the history does not have yet.
+  function importUnfollowed(rows) {
+    if (!rows.length || !state.uid) return 0;
+    const hist = state.hist && Array.isArray(state.hist.events) ? state.hist : { points: [], events: [] };
+    const have = new Set(hist.events.filter((e) => e.type === 'you_unfollowed').map((e) => e.u + ':' + e.at));
+    const events = rows.filter((r) => r.ts && !have.has(r.u + ':' + r.ts)).map((r) => ({ at: r.ts, type: 'you_unfollowed', u: r.u, name: '', priv: false }));
+    if (!events.length) return 0;
+    state.hist = { points: hist.points, events: hist.events.concat(events).sort((a, b) => a.at - b.at).slice(-HIST_CAPS.events) };
+    storageSet({ [histStoreKey(state.uid)]: state.hist });
+    refreshFlags();
+    applyTiles();
+    return events.length;
   }
   // A yes/no box inside the panel (the viewer never shows window.confirm).
   function askConfirm(titleKey, textKey, okKey, vars) {
@@ -2217,14 +2248,15 @@
     updateDatesStatus();
   }
   // Reads the list files out of an export zip through File.slice, so the media inside is never loaded.
-  async function readExportZip(file) {
+  // pick: which entries to read, the list files when not given.
+  async function readExportZip(file, pick) {
     const size = file.size;
     const tail = new Uint8Array(await file.slice(Math.max(0, size - 65557), size).arrayBuffer());
     const e = zipFindEocd(tail, size);
     if (!e) return null;
     const cd = new Uint8Array(await file.slice(e.cdOffset, e.cdOffset + e.cdSize).arrayBuffer());
     const out = [];
-    for (const c of exportListEntries(zipCentral(cd, e.count))) {
+    for (const c of (pick || exportListEntries)(zipCentral(cd, e.count))) {
       const at = zipDataStart(new Uint8Array(await file.slice(c.lho, c.lho + 30).arrayBuffer()));
       if (at < 0) continue;
       const data = new Uint8Array(await file.slice(c.lho + at, c.lho + at + c.csize).arrayBuffer());

@@ -372,17 +372,25 @@
     const trimmed = text.trim();
     const out = [];
     const seen = new Set();
-    const push = (u, ts) => {
+    const push = (u, ts, id) => {
       const name = String(u || '').trim().replace(/^@/, '').toLowerCase();
       if (!USERNAME.test(name) || seen.has(name)) return;
       seen.add(name);
-      out.push({ u: name, ts: typeof ts === 'number' && ts > 0 ? (ts < 1e12 ? ts * 1000 : ts) : null });
+      const row = { u: name, ts: typeof ts === 'number' && ts > 0 ? (ts < 1e12 ? ts * 1000 : ts) : null };
+      if (id && /^\d+$/.test(id)) row.id = id;
+      out.push(row);
     };
     const walk = (v, depth) => {
       if (depth > 5 || v == null) return;
       if (Array.isArray(v)) { v.forEach((x) => walk(x, depth + 1)); return; }
       if (typeof v !== 'object') return;
       if (Array.isArray(v.string_list_data)) { for (const d of v.string_list_data) if (d && typeof d.value === 'string') push(d.value, d.timestamp); return; }
+      if (Array.isArray(v.label_values)) {
+        // The 2026 export: one entry per account with labelled values and the account id as fbid.
+        const lv = v.label_values.find((x) => x && /^username$/i.test(String(x.label || '')));
+        if (lv && typeof lv.value === 'string') push(lv.value, v.timestamp, v.fbid != null ? String(v.fbid) : '');
+        return;
+      }
       if (typeof v.username === 'string') { push(v.username, v.timestamp); return; }
       if (typeof v.u === 'string') { push(v.u, v.ts); return; }
       Object.values(v).forEach((x) => walk(x, depth + 1));
@@ -516,6 +524,12 @@
   function exportListEntries(entries) {
     return (entries || []).filter((e) => e && typeof e.name === 'string' && EXPORT_LIST.test(e.name) && !/(^|\/)__MACOSX\//.test(e.name));
   }
+  // One export file by its base name, the json one when both json and html exist.
+  function pickExportEntry(entries, kind) {
+    const re = new RegExp('(^|/)' + kind + '\\.(json|html?)$', 'i');
+    const hits = (entries || []).filter((e) => e && typeof e.name === 'string' && re.test(e.name) && !/(^|\/)__MACOSX\//.test(e.name));
+    return hits.find((e) => /\.json$/i.test(e.name)) || hits[0] || null;
+  }
   // A zip is read from its end: the end record points at the central directory, which lists every entry
   // and where its local header sits. Three small pieces, so a page can read a large export through
   // File.slice without loading the media inside it. No ZIP64.
@@ -644,5 +658,5 @@
     return out;
   }
 
-  return { picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipEntries, zipText, shouldAutoCheck, autoCheckDefault, compareVersions, parseRelease, loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
+  return { pickExportEntry, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipEntries, zipText, shouldAutoCheck, autoCheckDefault, compareVersions, parseRelease, loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
 });

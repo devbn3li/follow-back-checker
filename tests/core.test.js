@@ -556,3 +556,30 @@ test('compareVersions and parseRelease', () => {
   assert.equal(core.parseRelease(null, { host: 'android' }), null);
   assert.equal(core.parseRelease(Object.assign({}, rel, { assets: [] }), { host: 'android', app: '1.0.0' }).get, rel.html_url, 'no asset: the release page');
 });
+
+test('parsePending reads the 2026 export shape with label_values and takes fbid as the id', () => {
+  const json = JSON.stringify([
+    { timestamp: 1792900154, media: [], label_values: [{ label: 'URL', value: '' }, { label: 'Name', value: 'Some One' }, { label: 'Username', value: 'Some.One' }], fbid: '17841467683111290' },
+    { timestamp: 1792900000, media: [], label_values: [{ label: 'Username', value: 'other' }], fbid: 'not-a-number' },
+    { timestamp: 1, media: [], label_values: [{ label: 'Name', value: 'no username here' }] },
+  ]);
+  assert.deepEqual(core.parsePending(json), [
+    { u: 'some.one', ts: 1792900154000, id: '17841467683111290' },
+    { u: 'other', ts: 1792900000000 },
+  ]);
+});
+
+test('pickExportEntry finds one export file in the zip, json before html', () => {
+  const entries = [
+    { name: 'connections/followers_and_following/pending_follow_requests.html' },
+    { name: '__MACOSX/connections/followers_and_following/._pending_follow_requests.json' },
+    { name: 'connections/followers_and_following/pending_follow_requests.json' },
+    { name: 'connections/followers_and_following/recently_unfollowed_profiles.json' },
+    { name: 'connections/followers_and_following/following.json' },
+  ];
+  assert.equal(core.pickExportEntry(entries, 'pending_follow_requests').name, 'connections/followers_and_following/pending_follow_requests.json');
+  assert.equal(core.pickExportEntry(entries.slice(0, 1), 'pending_follow_requests').name, entries[0].name, 'html when it is the only one');
+  assert.equal(core.pickExportEntry(entries, 'recently_unfollowed_profiles').name, entries[3].name);
+  assert.equal(core.pickExportEntry(entries, 'followers_1'), null);
+  assert.equal(core.pickExportEntry(null, 'x'), null);
+});
