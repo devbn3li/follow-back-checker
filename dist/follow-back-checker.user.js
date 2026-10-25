@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Follow Back Checker
 // @namespace    https://github.com/devbn3li/follow-back-checker
-// @version      1.5.2
+// @version      1.6.0
 // @description  Who you follow that does not follow you back, from your own logged-in instagram.com session. Nothing leaves the browser.
 // @author       devbn3li
 // @match        https://www.instagram.com/*
@@ -11,7 +11,7 @@
 // @downloadURL  https://raw.githubusercontent.com/devbn3li/follow-back-checker/main/dist/follow-back-checker.user.js
 // ==/UserScript==
 
-/* Follow Back Checker 1.5.2. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+/* Follow Back Checker 1.6.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
 // Panel styles. Injected into a shadow root by content.js, so Instagram's own CSS cannot leak in
 // and a strict page CSP cannot block them (they go in through a constructed stylesheet).
 var FBC_CSS = `
@@ -150,6 +150,9 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .unf:hover { background: var(--danger-soft); }
 .unf.arm { background: var(--danger); color: var(--bg); }
 .unf:disabled { opacity: 0.6; cursor: progress; }
+.unf.follow { border-color: var(--accent); color: var(--accent); }
+.unf.follow:hover { background: var(--accent-soft); }
+.unf.follow.arm { background: var(--accent); color: var(--accent-ink); }
 .modal { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); display: grid; place-items: center; z-index: 5; padding: 16px; }
 .modal .box { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 12px; padding: 16px; max-width: 380px; display: grid; gap: 10px; box-shadow: 0 12px 40px var(--shadow); }
 .mtitle { font-weight: 700; font-size: 15px; }
@@ -566,9 +569,16 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     unfollowStill: 'Instagram says you still follow them.',
     unfollowBusy: 'Wait for the check to finish.',
     unfollowWarnTitle: 'Before you unfollow',
-    unfollowWarn: 'Unfollowing many accounts quickly makes Instagram block actions on your account for a day or more. This button works one account at a time, 20 seconds apart, at most {h} per hour and {d} per day, and pauses for two hours if Instagram objects. Use it for a few accounts at a time.',
+    unfollowWarn: 'Following or unfollowing many accounts quickly makes Instagram block actions on your account for a day or more. These buttons work one account at a time, 20 seconds apart, at most {h} actions per hour and {d} per day, and pause for two hours if Instagram objects. Use them for a few accounts at a time.',
     unfollowWarnOk: 'I understand',
     unfollowQuota: '{h} unfollows left this hour, {d} today',
+    actionsQuota: '{h} actions left this hour, {d} today',
+    follow: 'Follow back',
+    followTitle: 'Follows this account after a second tap. Spaced out and capped to protect your account.',
+    toastFollowed: 'Followed @{u}',
+    toastRequested: 'Follow request sent to @{u}',
+    followFailed: 'Could not follow: {r}',
+    followUnconfirmed: 'Instagram did not confirm it. Open the profile to check.',
     lbFull: 'Full size',
     lbSave: 'Download image',
     lbFullFailed: 'Could not load the full size: {r}',
@@ -731,9 +741,16 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     unfollowStill: 'إنستجرام بيقول إنك لسه بتتابعه.',
     unfollowBusy: 'استنى الفحص يخلص.',
     unfollowWarnTitle: 'قبل ما تلغي متابعة',
-    unfollowWarn: 'إلغاء متابعة حسابات كتير بسرعة بيخلي إنستجرام يقفل الأكشنات على حسابك يوم أو أكتر. الزرار ده بيشتغل حساب حساب، كل 20 ثانية، بحد أقصى {h} في الساعة و{d} في اليوم، وبيقف ساعتين لو إنستجرام اعترض. استخدمه لكام حساب في المرة.',
+    unfollowWarn: 'متابعة أو إلغاء متابعة حسابات كتير بسرعة بيخلي إنستجرام يقفل الأكشنات على حسابك يوم أو أكتر. الزراير دي بتشتغل حساب حساب، كل 20 ثانية، بحد أقصى {h} أكشن في الساعة و{d} في اليوم، وبتقف ساعتين لو إنستجرام اعترض. استخدمها لكام حساب في المرة.',
     unfollowWarnOk: 'فاهم',
     unfollowQuota: 'باقي {h} إلغاء الساعة دي، {d} النهاردة',
+    actionsQuota: 'باقي {h} أكشن الساعة دي، {d} النهاردة',
+    follow: 'رد المتابعة',
+    followTitle: 'بيتابع الحساب ده بعد ضغطة تانية. متباعد ومحدود علشان حسابك.',
+    toastFollowed: 'تابعت @{u}',
+    toastRequested: 'اتبعت طلب متابعة لـ @{u}',
+    followFailed: 'مقدرناش نتابع: {r}',
+    followUnconfirmed: 'إنستجرام ماأكدش. افتح البروفايل واتأكد.',
     lbFull: 'الحجم الكامل',
     lbSave: 'تحميل الصورة',
     lbFullFailed: 'مقدرناش نجيب الحجم الكامل: {r}',
@@ -1587,6 +1604,19 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       });
       row.append(ub);
     }
+    if (withCheck && state.tab === 'fans' && r.id) {
+      // Follow back: the same two-tap arming, spacing and caps as Unfollow.
+      const fb = h('button', { class: 'unf follow', type: 'button', title: t('followTitle') }, t('follow'));
+      let armed = 0;
+      fb.addEventListener('click', () => {
+        if (armed && Date.now() - armed < 4000) { armed = 0; followRow(r, row, fb); return; }
+        armed = Date.now();
+        fb.classList.add('arm');
+        fb.textContent = t('unfollowConfirm');
+        setTimeout(() => { if (armed && Date.now() - armed >= 3900) { armed = 0; fb.classList.remove('arm'); fb.textContent = t('follow'); } }, 4000);
+      });
+      row.append(fb);
+    }
     if (withCheck) {
       const on = isProtected(r.u);
       const pb = h('button', { class: 'protect' + (on ? ' on' : ''), type: 'button', title: t('protectTitle') }, on ? t('protectedLabel') : t('protect'));
@@ -1674,12 +1704,12 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     const rows = listRows();
     const handled = all.filter((r) => isDone(r.u)).length;
     const protectedN = all.length - base.length;
-    const quota = state.tab === 'notback' ? actionQuota() : null;
+    const quota = (state.tab === 'notback' || state.tab === 'fans') ? actionQuota() : null;
     ui.listTitle.textContent = t(TABS[state.tab].title, { n: num(base.length), nRaw: base.length })
       + (rows.length !== base.length ? ' · ' + t('showing', { n: num(rows.length) }) : '')
       + (handled ? ' · ' + t('handled', { n: num(handled) }) : '')
       + (protectedN ? ' · ' + t('nProtected', { n: num(protectedN) }) : '')
-      + (quota && state.actions.times.length ? ' · ' + t('unfollowQuota', { h: num(quota.hourLeft), d: num(quota.dayLeft) }) : '');
+      + (quota && state.actions.times.length ? ' · ' + t('actionsQuota', { h: num(quota.hourLeft), d: num(quota.dayLeft) }) : '');
     for (const r of rows) ui.list.append(rowNode(r, true));
     ui.list.hidden = rows.length === 0;
     ui.empty.hidden = rows.length !== 0;
@@ -2155,6 +2185,79 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
     applyTiles();
+  }
+  // Asks Instagram to follow one account. Resolves to 'following', or 'requested' for a private account.
+  async function followRequest(r) {
+    const base = { 'x-csrftoken': cookie('csrftoken'), 'x-ig-app-id': API.appId, 'x-asbd-id': API.asbdId, 'x-requested-with': 'XMLHttpRequest' };
+    let a = await postForm('/api/v1/friendships/create/' + encodeURIComponent(r.id) + '/', base, { container_module: 'profile', user_id: r.id });
+    let verdict = judgeAction(a.status, a.data);
+    if (verdict === 'blocked') throw new ActionBlocked('blocked');
+    if (verdict !== 'ok') {
+      // The older web route.
+      a = await postForm('/web/friendships/' + encodeURIComponent(r.id) + '/follow/', base, {});
+      verdict = judgeAction(a.status, a.data);
+      if (verdict === 'blocked') throw new ActionBlocked('blocked');
+      if (verdict !== 'ok') throw new Error('HTTP ' + a.status);
+    }
+    let st = null;
+    try { st = await igGet(API.friendship(encodeURIComponent(r.id))); } catch (e) { if (e instanceof AuthError) throw e; st = null; }
+    if (st && st.following === true) return 'following';
+    if (st && st.outgoing_request === true) return 'requested';
+    const fs = a.data && a.data.friendship_status;
+    if (fs && fs.following === true) return 'following';
+    if (fs && fs.outgoing_request === true) return 'requested';
+    if (a.data && a.data.result === 'following') return 'following';
+    if (a.data && a.data.result === 'requested') return 'requested';
+    throw new Error(t('followUnconfirmed'));
+  }
+  function recordFollow(r) {
+    const snap = state.snap;
+    if (!snap || snap.following.some((x) => x.u === r.u)) return;
+    snap.following.push({ u: r.u, id: r.id, name: r.name || '', priv: !!r.priv, ver: !!r.ver, pic: r.pic || '' });
+    state.hist = appendHistory(state.hist, pointFrom(snap), [{ at: Date.now(), type: 'you_followed', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
+    state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
+    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
+    ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
+    applyTiles();
+  }
+  async function followRow(r, row, btn) {
+    btn.classList.remove('arm');
+    btn.textContent = t('follow');
+    if (!state.actions.warned) {
+      const ok = await askConfirm('unfollowWarnTitle', 'unfollowWarn', 'unfollowWarnOk', { h: ACT.perHour, d: ACT.perDay });
+      if (!ok) return;
+      state.actions.warned = true;
+      saveActions();
+    }
+    const why = unfollowBlocker();
+    if (why) { toast(why); return; }
+    if (state.running) { toast(t('unfollowBusy')); return; }
+    btn.disabled = true;
+    btn.textContent = t('pillChecking');
+    try {
+      const outcome = await followRequest(r);
+      state.actions.times.push(Date.now());
+      saveActions();
+      if (outcome === 'following') {
+        recordFollow(r);
+        toast(t('toastFollowed', { u: r.u }));
+        renderList();
+      } else {
+        btn.remove();
+        row.append(h('span', { class: 'chip live' }, t('liveYouRequested')));
+        toast(t('toastRequested', { u: r.u }));
+      }
+    } catch (e) {
+      if (e instanceof ActionBlocked || e instanceof RateLimited) {
+        state.actions.pausedUntil = Date.now() + (e instanceof ActionBlocked ? ACT.blockPauseMs : ACT.rateLimitPauseMs);
+        saveActions();
+        toast(t('unfollowBlocked', { t: fmtT(state.actions.pausedUntil) }));
+      } else {
+        toast(t('followFailed', { r: e && e.message ? e.message : String(e) }));
+      }
+      btn.disabled = false;
+      btn.textContent = t('follow');
+    }
   }
   async function unfollowRow(r, btn) {
     btn.classList.remove('arm');

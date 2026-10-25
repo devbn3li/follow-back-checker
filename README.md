@@ -38,12 +38,12 @@ The app is a single screen with Instagram's website inside it and the checker in
 - **On any profile page** a pill says whether that account follows you, answered from your last check with no request; tap it for a live answer.
 - **Protected accounts**: accounts you follow on purpose (friends, brands, news) stay out of "don't follow you back". Tap Protect on a row, or paste and import lists; export them as JSON.
 - **Filters and downloads**: profile pictures on every row, a verified tag, filters for verified/private/public accounts, and a CSV download of any list or of the history (the Android app saves it to Downloads).
-- **Unfollow, one at a time**: an Unfollow button on each row of "don't follow you back". Two taps to confirm, 20 seconds between unfollows, at most 30 per hour and 100 per day, and it pauses for two hours if Instagram refuses. The lists and the history update right away.
+- **Unfollow and Follow back, one at a time**: an Unfollow button on each row of "don't follow you back" and a Follow back button on each row of "you don't follow back". Two taps to confirm, 20 seconds between unfollows, at most 30 per hour and 100 per day, and it pauses for two hours if Instagram refuses. The lists and the history update right away.
 - Several Instagram accounts in one browser are kept apart; the panel follows whoever is logged in.
 
 ## Keep it safe
 
-These are Instagram's internal web endpoints, not an official API. The tool paces itself and backs off when Instagram says "slow down". The only action it ever performs on your account is an unfollow you ask for by tapping Unfollow on one row and confirming it: never in bulk, 20 seconds apart, at most 30 per hour and 100 per day, verified with Instagram afterwards, and paused for two hours if Instagram objects. No follows, likes or messages. Run a check every few days, not every hour.
+These are Instagram's internal web endpoints, not an official API. The tool paces itself and backs off when Instagram says "slow down". The only actions it ever performs on your account are the unfollow or follow back you ask for by tapping the button on one row and confirming it: never in bulk, 20 seconds apart, at most 30 actions per hour and 100 per day, verified with Instagram afterwards, and paused for two hours if Instagram objects. No likes, no messages. Run a check every few days, not every hour.
 
 ## Development
 
