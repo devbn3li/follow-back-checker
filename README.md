@@ -61,7 +61,7 @@ If Instagram changes its site, the endpoints and headers are in the `API` consta
 
 ### Releasing
 
-```
+```sh
 npm run build && git commit -am "release: 1.x.y" && git tag v1.x.y && git push && git push --tags
 ```
 
