@@ -583,3 +583,22 @@ test('pickExportEntry finds one export file in the zip, json before html', () =>
   assert.equal(core.pickExportEntry(entries, 'followers_1'), null);
   assert.equal(core.pickExportEntry(null, 'x'), null);
 });
+
+test('guessListKind reads the base name, not the folder that holds every list', () => {
+  assert.equal(core.guessListKind('connections/followers_and_following/followers_1.json', [], null), 'followers');
+  assert.equal(core.guessListKind('connections/followers_and_following/following.json', [], null), 'following');
+  assert.equal(core.guessListKind('followers.html', [], null), 'followers');
+});
+
+test('parsePending takes the username from the title or the link when value is missing', () => {
+  const json = JSON.stringify({ relationships_following: [
+    { title: 'From.Title', string_list_data: [{ href: 'https://www.instagram.com/From.Title', timestamp: 1700000001 }] },
+    { title: '', string_list_data: [{ href: 'https://www.instagram.com/from_link/', timestamp: 1700000002 }] },
+    { title: 'ignored', string_list_data: [{ href: 'https://www.instagram.com/x', value: 'from_value', timestamp: 1700000003 }] },
+  ] });
+  assert.deepEqual(core.parsePending(json), [
+    { u: 'from.title', ts: 1700000001000 },
+    { u: 'from_link', ts: 1700000002000 },
+    { u: 'from_value', ts: 1700000003000 },
+  ]);
+});

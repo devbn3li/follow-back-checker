@@ -384,7 +384,15 @@
       if (depth > 5 || v == null) return;
       if (Array.isArray(v)) { v.forEach((x) => walk(x, depth + 1)); return; }
       if (typeof v !== 'object') return;
-      if (Array.isArray(v.string_list_data)) { for (const d of v.string_list_data) if (d && typeof d.value === 'string') push(d.value, d.timestamp); return; }
+      if (Array.isArray(v.string_list_data)) {
+        // Older files put the username in value; the current following.json only in the title and the link.
+        for (const d of v.string_list_data) {
+          if (!d) continue;
+          const fromHref = typeof d.href === 'string' ? (d.href.match(/instagram\.com\/([^/?#]+)/) || [])[1] : '';
+          push(typeof d.value === 'string' && d.value ? d.value : (typeof v.title === 'string' && v.title ? v.title : fromHref), d.timestamp);
+        }
+        return;
+      }
       if (Array.isArray(v.label_values)) {
         // The 2026 export: one entry per account with labelled values and the account id as fbid.
         const lv = v.label_values.find((x) => x && /^username$/i.test(String(x.label || '')));
@@ -509,9 +517,9 @@
   }
   // Which list an export file holds: its name says so; otherwise whichever of your lists it overlaps most.
   function guessListKind(name, rows, snap) {
-    const n = String(name || '').toLowerCase();
-    if (/following/.test(n)) return 'following';
-    if (/follower/.test(n)) return 'followers';
+    const n = String(name || '').toLowerCase().split('/').pop(); // the base name: every list sits in followers_and_following/
+    if (/^following/.test(n)) return 'following';
+    if (/^follower/.test(n)) return 'followers';
     if (!snap || !Array.isArray(snap.following) || !Array.isArray(snap.followers)) return null;
     const fg = new Set(snap.following.map((r) => r.u)), fw = new Set(snap.followers.map((r) => r.u));
     let a = 0, b = 0;
