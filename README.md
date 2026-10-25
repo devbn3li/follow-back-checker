@@ -7,7 +7,7 @@ Not affiliated with Instagram or Meta. See [PRIVACY.md](PRIVACY.md).
 ## Ways to use it
 
 | | Where | Setup |
-|---|---|---|
+| --- | --- | --- |
 | **Android app** | Phones, Android 8+ | Install the APK from [Releases](../../releases), open it, log in to Instagram inside it. |
 | **Chrome / Edge / Brave extension** | Desktop | Load the `extension/` folder unpacked (see below). |
 | **Userscript** | Firefox for Android with Violentmonkey, desktop browsers with Tampermonkey | Install `dist/follow-back-checker.user.js`. |
@@ -44,7 +44,7 @@ These are Instagram's internal web endpoints, not an official API. The tool pace
 
 ## Development
 
-```
+```sh
 npm test        # unit tests for the pure logic, the translations and the bundle
 npm run build   # dist/checker.js, dist/follow-back-checker.user.js, dist/bookmarklet.txt, android assets
 ```
