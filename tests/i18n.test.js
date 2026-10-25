@@ -35,7 +35,7 @@ test('function entries render with the same inputs', () => {
 
 test('arabic strings are actually arabic', () => {
   const arabicLetters = /[؀-ۿ]/;
-  const latinOnly = new Set(['title', 'langToggle']);
+  const latinOnly = new Set(['title', 'langToggle', 'cardTitle']);
   for (const key of Object.keys(i18n.ar)) {
     const v = i18n.ar[key];
     if (typeof v !== 'string' || latinOnly.has(key)) continue;

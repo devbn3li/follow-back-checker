@@ -173,3 +173,47 @@ test('findFollowing digs the following flag out of any answer', () => {
   assert.equal(core.findFollowing({ following: true }), null, 'a lone flag without the other fields is ignored');
   assert.equal(core.findFollowing(null), null);
 });
+
+test('lostSince and whoLeft find who unfollowed you and is still followed', () => {
+  const events = [
+    { at: 100, type: 'lost', u: 'a', name: '', priv: false },
+    { at: 300, type: 'lost', u: 'a', name: '', priv: false },
+    { at: 200, type: 'lost', u: 'b', name: '', priv: false },
+    { at: 250, type: 'gained', u: 'c', name: '', priv: false },
+    { at: 'x', type: 'lost', u: 'bad', name: '', priv: false },
+  ];
+  const lost = core.lostSince(events);
+  assert.equal(lost.get('a'), 300, 'latest departure wins');
+  assert.equal(lost.get('b'), 200);
+  assert.equal(lost.has('c'), false);
+  assert.equal(lost.has('bad'), false);
+  const notback = [{ u: 'b' }, { u: 'a' }, { u: 'z' }];
+  const left = core.whoLeft(notback, lost);
+  assert.deepEqual(left.map((r) => r.u), ['a', 'b'], 'newest departure first, others dropped');
+  assert.equal(left[0].leftAt, 300);
+  assert.deepEqual(core.whoLeft([], lost), []);
+});
+
+test('computeStats: rate, week change, best and worst check', () => {
+  const day = 86400000;
+  const now = 20 * day;
+  const pts = [
+    { at: 1 * day, following: 100, followers: 50, mutual: 40, notback: 60 },
+    { at: 10 * day, following: 102, followers: 56, mutual: 45, notback: 57 },
+    { at: 15 * day, following: 104, followers: 53, mutual: 46, notback: 58 },
+    { at: 19 * day, following: 104, followers: 58, mutual: 48, notback: 56 },
+  ];
+  const s = core.computeStats(pts, now);
+  assert.equal(s.rate, 46, 'mutual over following of the last check');
+  assert.deepEqual(s.week, { followers: 2, following: 2, since: 10 * day }, 'compared with the newest check at least a week old');
+  assert.deepEqual(s.best, { at: 10 * day, delta: 6 });
+  assert.deepEqual(s.worst, { at: 15 * day, delta: -3 });
+  assert.equal(s.checks, 4);
+  const short = core.computeStats(pts.slice(2), now);
+  assert.equal(short.week.since, 15 * day, 'short history compares with the first check');
+  const one = core.computeStats([pts[0]], now);
+  assert.equal(one.week, null);
+  assert.equal(one.best, null);
+  assert.equal(core.computeStats([], now), null);
+  assert.equal(core.computeStats([{ at: 1, following: 0, followers: 0, mutual: 0, notback: 0 }], now).rate, 0);
+});

@@ -191,5 +191,39 @@
     return null;
   }
 
-  return { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing };
+  // Who unfollowed you and when (the latest time), from the history events.
+  function lostSince(events) {
+    const m = new Map();
+    for (const e of events || []) {
+      if (!e || e.type !== 'lost' || typeof e.u !== 'string' || typeof e.at !== 'number') continue;
+      const prev = m.get(e.u);
+      if (prev == null || e.at > prev) m.set(e.u, e.at);
+    }
+    return m;
+  }
+  // Accounts you still follow although they unfollowed you, newest departure first.
+  function whoLeft(notback, lost) {
+    return (notback || []).filter((r) => lost.has(r.u)).map((r) => Object.assign({}, r, { leftAt: lost.get(r.u) })).sort((a, b) => b.leftAt - a.leftAt);
+  }
+  // Numbers for the stats strip: follow-back rate, change over the last week, best and worst check.
+  function computeStats(points, now) {
+    const pts = (points || []).filter((p) => p && typeof p.at === 'number').slice().sort((a, b) => a.at - b.at);
+    if (!pts.length) return null;
+    const last = pts[pts.length - 1];
+    const rate = last.following ? Math.round((100 * last.mutual) / last.following) : 0;
+    const weekAgo = now - 7 * 86400000;
+    let ref = null;
+    for (const p of pts) if (p.at <= weekAgo) ref = p; // the newest check that is at least a week old
+    if (!ref && pts.length > 1) ref = pts[0];          // short history: compare with the first check
+    const week = ref && ref !== last ? { followers: last.followers - ref.followers, following: last.following - ref.following, since: ref.at } : null;
+    let best = null, worst = null;
+    for (let i = 1; i < pts.length; i++) {
+      const delta = pts[i].followers - pts[i - 1].followers;
+      if (!best || delta > best.delta) best = { at: pts[i].at, delta };
+      if (!worst || delta < worst.delta) worst = { at: pts[i].at, delta };
+    }
+    return { rate, week, best, worst, checks: pts.length, first: pts[0].at, last: last.at };
+  }
+
+  return { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
 });

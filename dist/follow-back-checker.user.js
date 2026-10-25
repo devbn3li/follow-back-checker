@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Follow Back Checker
 // @namespace    https://github.com/devbn3li/follow-back-checker
-// @version      1.6.0
+// @version      1.7.0
 // @description  Who you follow that does not follow you back, from your own logged-in instagram.com session. Nothing leaves the browser.
 // @author       devbn3li
 // @match        https://www.instagram.com/*
@@ -11,7 +11,7 @@
 // @downloadURL  https://raw.githubusercontent.com/devbn3li/follow-back-checker/main/dist/follow-back-checker.user.js
 // ==/UserScript==
 
-/* Follow Back Checker 1.6.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+/* Follow Back Checker 1.7.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
 // Panel styles. Injected into a shadow root by content.js, so Instagram's own CSS cannot leak in
 // and a strict page CSP cannot block them (they go in through a constructed stylesheet).
 var FBC_CSS = `
@@ -179,6 +179,12 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .chart circle.s2 { fill: var(--c2); stroke: var(--bg); stroke-width: 2; }
 .chart .cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
 .cnote { padding: 14px 6px; color: var(--muted); font-size: 13px; text-align: center; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; }
+.drawer.narrow .stats { grid-template-columns: repeat(2, 1fr); }
+.stat { border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: grid; gap: 2px; align-content: start; min-width: 0; }
+.stat .value { font-size: 22px; font-weight: 600; line-height: 1.15; direction: ltr; unicode-bidi: isolate; overflow-wrap: anywhere; }
+.stat .label { font-size: 11.5px; line-height: 1.3; color: var(--muted); }
+.lbopt { color: #FFFFFF; font-size: 13px; display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
 .ctip { position: absolute; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px; line-height: 1.4; box-shadow: 0 6px 20px var(--shadow); pointer-events: none; width: 190px; }
 .ctipd { color: var(--muted); margin-bottom: 2px; }
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); padding: 6px 4px 0; }
@@ -401,7 +407,41 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     return null;
   }
 
-  return { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing };
+  // Who unfollowed you and when (the latest time), from the history events.
+  function lostSince(events) {
+    const m = new Map();
+    for (const e of events || []) {
+      if (!e || e.type !== 'lost' || typeof e.u !== 'string' || typeof e.at !== 'number') continue;
+      const prev = m.get(e.u);
+      if (prev == null || e.at > prev) m.set(e.u, e.at);
+    }
+    return m;
+  }
+  // Accounts you still follow although they unfollowed you, newest departure first.
+  function whoLeft(notback, lost) {
+    return (notback || []).filter((r) => lost.has(r.u)).map((r) => Object.assign({}, r, { leftAt: lost.get(r.u) })).sort((a, b) => b.leftAt - a.leftAt);
+  }
+  // Numbers for the stats strip: follow-back rate, change over the last week, best and worst check.
+  function computeStats(points, now) {
+    const pts = (points || []).filter((p) => p && typeof p.at === 'number').slice().sort((a, b) => a.at - b.at);
+    if (!pts.length) return null;
+    const last = pts[pts.length - 1];
+    const rate = last.following ? Math.round((100 * last.mutual) / last.following) : 0;
+    const weekAgo = now - 7 * 86400000;
+    let ref = null;
+    for (const p of pts) if (p.at <= weekAgo) ref = p; // the newest check that is at least a week old
+    if (!ref && pts.length > 1) ref = pts[0];          // short history: compare with the first check
+    const week = ref && ref !== last ? { followers: last.followers - ref.followers, following: last.following - ref.following, since: ref.at } : null;
+    let best = null, worst = null;
+    for (let i = 1; i < pts.length; i++) {
+      const delta = pts[i].followers - pts[i - 1].followers;
+      if (!best || delta > best.delta) best = { at: pts[i].at, delta };
+      if (!worst || delta < worst.delta) worst = { at: pts[i].at, delta };
+    }
+    return { rate, week, best, worst, checks: pts.length, first: pts[0].at, last: last.at };
+  }
+
+  return { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
 });
 
 ;
@@ -584,6 +624,28 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     lbFullFailed: 'Could not load the full size: {r}',
     lbSlow: 'Instagram asked to slow down. Full-size pictures are back after {t}; until then only the small one can be saved.',
     toastImgOpen: 'Opened in a new tab; save it from there.',
+    onlyLeft: 'Only those who unfollowed you',
+    leftChip: 'unfollowed you {d}',
+    nLeft: '{n} unfollowed you',
+    statRate: 'follow you back',
+    statWeek: 'followers since {since}',
+    statBest: 'best check, {d}',
+    statWorst: 'worst check, {d}',
+    statNeedMore: 'needs more checks',
+    share: 'Share card',
+    cardName: 'Share card',
+    cardTitle: 'Follow Check',
+    cardAnon: 'my Instagram',
+    cardRate: 'of the accounts I follow follow me back',
+    cardFollowing: 'following',
+    cardFollowers: 'followers',
+    cardMutual: 'follow each other',
+    cardNotback: 'don’t follow back',
+    cardWeek: '{n} followers since {since}',
+    needUpdate: 'Update the app to save files.',
+    cardFooter: 'made with Follow Check',
+    showName: 'Show my username',
+    cardFailed: 'Could not draw the card.',
   };
 
   const ar = {
@@ -756,6 +818,28 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     lbFullFailed: 'مقدرناش نجيب الحجم الكامل: {r}',
     lbSlow: 'إنستجرام طلب نهدّي شوية. الصور الكبيرة هترجع بعد {t}، ولحد ساعتها الصغيرة بس هي اللي بتتحمل.',
     toastImgOpen: 'اتفتحت في تاب جديد، احفظها من هناك.',
+    onlyLeft: 'اللي سابوك بس',
+    leftChip: 'سابك {d}',
+    nLeft: '{n} سابوك',
+    statRate: 'بيردوا المتابعة',
+    statWeek: 'متابعين من {since}',
+    statBest: 'أحسن فحص، {d}',
+    statWorst: 'أسوأ فحص، {d}',
+    statNeedMore: 'محتاج فحوصات أكتر',
+    share: 'كارت للمشاركة',
+    cardName: 'كارت المشاركة',
+    cardTitle: 'Follow Check',
+    cardAnon: 'حسابي على إنستجرام',
+    cardRate: 'من اللي بتابعهم بيردوا لي المتابعة',
+    cardFollowing: 'بتابعهم',
+    cardFollowers: 'متابعين',
+    cardMutual: 'متبادل',
+    cardNotback: 'مش بيردوا',
+    cardWeek: '{n} متابع من {since}',
+    needUpdate: 'حدّث التطبيق علشان تحفظ الملفات.',
+    cardFooter: 'اتعمل بـ Follow Check',
+    showName: 'اعرض اسمي',
+    cardFailed: 'مقدرناش نرسم الكارت.',
   };
 
   return { en, ar };
@@ -779,7 +863,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -1058,7 +1142,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     changes: { label: 'tileHistory', title: 'titleHistory', empty: '' },
   };
   const freshActions = () => ({ times: [], pausedUntil: 0, warned: false });
-  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0 };
+  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, left: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0 };
   const live = { following: 0, followers: 0 };
   const ui = {};
   // Small preferences, remembered across visits: language, panel width, and the pause after Instagram asks us to slow down.
@@ -1137,6 +1221,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.showProtected = h('input', { type: 'checkbox', onchange: () => { state.showProtected = ui.showProtected.checked; renderList(); } });
     ui.showProtectedText = h('span');
     ui.showProtectedWrap = h('label', { class: 'chk', hidden: true }, ui.showProtected, ui.showProtectedText);
+    ui.onlyLeft = h('input', { type: 'checkbox', onchange: () => { state.onlyLeft = ui.onlyLeft.checked; renderList(); } });
+    ui.onlyLeftText = h('span');
+    ui.onlyLeftWrap = h('label', { class: 'chk', hidden: true }, ui.onlyLeft, ui.onlyLeftText);
+    ui.share = h('button', { class: 'btn small', type: 'button', onclick: () => openShareCard() });
     ui.kindOpts = ['all', 'verified', 'notVerified', 'private', 'public'].map((v) => h('option', { value: v }));
     ui.kindFilter = h('select', { class: 'field sel', onchange: () => { state.kind = ui.kindFilter.value; renderList(); } }, ui.kindOpts);
     ui.filterOpts = ['all', 'others', 'gained', 'lost', 'you_followed', 'you_unfollowed'].map((v) => h('option', { value: v }));
@@ -1144,7 +1232,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.copy = h('button', { class: 'btn small', type: 'button', onclick: () => copyList() });
     ui.download = h('button', { class: 'btn small', type: 'button', onclick: () => downloadCurrent() });
     ui.protectedBtn = h('button', { class: 'btn small', type: 'button', onclick: () => { state.tab = 'protected'; renderList(); } });
-    ui.toolbar = h('div', { class: 'toolbar' }, ui.search, ui.hideDoneWrap, ui.showProtectedWrap, ui.kindFilter, ui.evFilter, ui.copy, ui.download, ui.protectedBtn);
+    ui.toolbar = h('div', { class: 'toolbar' }, ui.search, ui.hideDoneWrap, ui.showProtectedWrap, ui.onlyLeftWrap, ui.kindFilter, ui.evFilter, ui.copy, ui.download, ui.protectedBtn, ui.share);
     ui.listTitle = h('div', { class: 'listtitle' });
     ui.chart = h('div', { class: 'charthost', hidden: true });
     // Protected accounts: paste, import, export, and the list itself.
@@ -1187,8 +1275,11 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.lbFull = h('button', { class: 'btn small', type: 'button', onclick: () => loadFullSize() });
     ui.lbSave = h('button', { class: 'btn small primary', type: 'button', onclick: () => saveCurrentImage() });
     ui.lbClose = h('button', { class: 'btn small', type: 'button', onclick: () => closeLightbox() });
+    ui.lbShowName = h('input', { type: 'checkbox', checked: true, onchange: () => renderShareCard() });
+    ui.lbShowNameText = h('span');
+    ui.lbOpt = h('label', { class: 'lbopt', hidden: true }, ui.lbShowName, ui.lbShowNameText);
     ui.lightbox = h('div', { class: 'lightbox', hidden: true, onclick: (e) => { if (e.target === ui.lightbox) closeLightbox(); } },
-      h('div', { class: 'lbbox' }, ui.lbImg, ui.lbName, h('div', { class: 'lbbar' }, ui.lbFull, ui.lbSave, ui.lbClose)));
+      h('div', { class: 'lbbox' }, ui.lbImg, ui.lbName, ui.lbOpt, h('div', { class: 'lbbar' }, ui.lbFull, ui.lbSave, ui.lbClose)));
     root.append(ui.fabwrap, ui.drawer, ui.lightbox);
     relabel();
     wireResize();
@@ -1219,6 +1310,9 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.filterOpts.forEach((o, i) => { o.textContent = t(optKeys[i]); });
     for (const k of Object.keys(TABS)) ui.tile[k].label.textContent = t(TABS[k].label);
     ui.showProtectedText.textContent = t('showProtected');
+    ui.onlyLeftText.textContent = t('onlyLeft');
+    ui.share.textContent = t('share');
+    ui.lbShowNameText.textContent = t('showName');
     const kindKeys = ['kindAll', 'kindVerified', 'kindNotVerified', 'kindPrivate', 'kindPublic'];
     ui.kindOpts.forEach((o, i) => { o.textContent = t(kindKeys[i]); });
     ui.download.textContent = t('download');
@@ -1239,14 +1333,19 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const lb = { rec: null, url: '', hd: false };
   function openLightbox(rec) {
     if (!rec || !rec.pic) return;
-    lb.rec = rec; lb.url = rec.pic; lb.hd = false; lb.loading = null;
+    lb.rec = rec; lb.url = rec.pic; lb.hd = false; lb.loading = null; lb.card = null;
     ui.lbImg.src = rec.pic;
     ui.lbName.textContent = '@' + rec.u;
     ui.lbFull.hidden = true;
+    ui.lbOpt.hidden = true;
     ui.lightbox.hidden = false;
     loadFullSize(true); // the lists only carry a 150px thumbnail; fetch the real picture right away
   }
-  function closeLightbox() { ui.lightbox.hidden = true; }
+  function closeLightbox() {
+    ui.lightbox.hidden = true;
+    if (lb.card && lb.card.url) URL.revokeObjectURL(lb.card.url);
+    lb.card = null; // a toBlob still in flight sees this and drops its result
+  }
   // One profile-info request, the same one the site makes, for the large picture. Resolves to
   // true once the viewer shows the full size. The button only appears when the automatic load could not run.
   function loadFullSize(auto) {
@@ -1315,6 +1414,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   }
   // Downloads the full-size picture, fetching it first when the viewer still shows the thumbnail.
   async function saveCurrentImage() {
+    if (lb.card) { await saveCanvas(lb.card.canvas, 'follow-check-card.png'); return; }
     const rec = lb.rec;
     if (!rec || !lb.url) return;
     ui.lbSave.disabled = true;
@@ -1326,6 +1426,134 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       ui.lbSave.disabled = false;
     }
   }
+
+  // --- share card: a story-sized PNG with the numbers, drawn locally
+  function shareCardData() {
+    const snap = state.snap, L = state.lists;
+    if (!snap || !L) return null;
+    const stats = computeStats(state.hist && state.hist.points ? state.hist.points : [pointFrom(snap)], Date.now());
+    const nf = snap.following.length;
+    return {
+      me: snap.me || '',
+      at: snap.at,
+      following: nf,
+      followers: snap.followers.length,
+      mutual: L.mutual.length,
+      notback: L.notback.length,
+      rate: nf ? Math.round((100 * L.mutual.length) / nf) : 0,
+      week: stats && stats.week ? stats.week : null,
+    };
+  }
+  function roundRect(g, x, y, w, hgt, r) {
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + hgt, r);
+    g.arcTo(x + w, y + hgt, x, y + hgt, r);
+    g.arcTo(x, y + hgt, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+  }
+  function drawShareCard(d, showName) {
+    const W = 1080, H = 1920;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    const font = (weight, size) => `${weight} ${size}px system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Arabic", "Noto Naskh Arabic", Arial, sans-serif`;
+    const grad = g.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, '#0E7C7B');
+    grad.addColorStop(1, '#0B2B33');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, W, H);
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.direction = lang === 'ar' ? 'rtl' : 'ltr';
+    g.fillStyle = '#FFFFFF';
+    g.font = font(700, 64);
+    g.fillText(t('cardTitle'), W / 2, 190);
+    g.fillStyle = 'rgba(255,255,255,0.85)';
+    g.font = font(400, 42);
+    g.fillText(showName && d.me ? '@' + d.me : t('cardAnon'), W / 2, 262);
+    const cardX = 90, cardY = 340, cardW = W - 180, cardH = 1260;
+    roundRect(g, cardX, cardY, cardW, cardH, 48);
+    g.fillStyle = '#FFFFFF';
+    g.fill();
+    g.fillStyle = '#0E7C7B';
+    g.font = font(800, 220);
+    g.fillText(d.rate + '%', W / 2, cardY + 230);
+    g.fillStyle = '#5A6772';
+    g.font = font(500, 40);
+    g.fillText(t('cardRate'), W / 2, cardY + 370);
+    const items = [[d.following, t('cardFollowing')], [d.followers, t('cardFollowers')], [d.mutual, t('cardMutual')], [d.notback, t('cardNotback')]];
+    const colW = cardW / 2;
+    items.forEach(([v, label], i) => {
+      const cx = cardX + colW * (i % 2) + colW / 2;
+      const cy = cardY + 560 + Math.floor(i / 2) * 290;
+      g.fillStyle = '#151D25';
+      g.font = font(700, 112);
+      g.fillText(num(v), cx, cy);
+      g.fillStyle = '#5A6772';
+      g.font = font(500, 38);
+      g.fillText(label, cx, cy + 92);
+    });
+    if (d.week) {
+      const n = (d.week.followers >= 0 ? '+' : '−') + num(Math.abs(d.week.followers));
+      g.fillStyle = d.week.followers >= 0 ? '#1E8E5A' : '#B26A00';
+      g.font = font(600, 44);
+      g.fillText(t('cardWeek', { n, since: fmtMD(d.week.since) }), W / 2, cardY + 1150);
+    }
+    g.fillStyle = 'rgba(255,255,255,0.8)';
+    g.font = font(500, 36);
+    g.fillText(fmtMD(d.at) + ' · ' + t('cardFooter'), W / 2, H - 150);
+    return c;
+  }
+  function renderShareCard() {
+    const d = shareCardData();
+    if (!d) return;
+    let canvas;
+    try { canvas = drawShareCard(d, ui.lbShowName.checked); } catch (e) { toast(t('cardFailed')); return; }
+    if (lb.card && lb.card.url) URL.revokeObjectURL(lb.card.url);
+    lb.card = { canvas, url: '' };
+    canvas.toBlob((blob) => {
+      if (!blob || !lb.card || lb.card.canvas !== canvas) return;
+      lb.card.url = URL.createObjectURL(blob);
+      ui.lbImg.src = lb.card.url;
+    }, 'image/png');
+  }
+  function openShareCard() {
+    if (!state.snap || !state.lists) return;
+    lb.rec = null; lb.url = ''; lb.hd = false; lb.loading = null; lb.card = null;
+    ui.lbImg.removeAttribute('src');
+    ui.lbName.textContent = t('cardName');
+    ui.lbFull.hidden = true;
+    ui.lbOpt.hidden = false;
+    ui.lightbox.hidden = false;
+    renderShareCard();
+  }
+  // Saves a drawn image: through the Android app when it hosts the page, otherwise as a browser download.
+  function saveCanvas(canvas, name) {
+    return new Promise((resolve) => {
+      try {
+        const bridge = window.FollowCheckHost;
+        if (bridge && typeof bridge.saveBase64 === 'function') {
+          const b64 = canvas.toDataURL('image/png').split(',')[1] || '';
+          const ok = b64 && bridge.saveBase64(name, 'image/png', b64);
+          toast(ok ? t('toastSaved', { name }) : t('toastSaveFailed'));
+          resolve(!!ok);
+          return;
+        }
+        if (HOST === 'android') { toast(t('needUpdate')); resolve(false); return; } // an older app build: a WebView cannot download a blob by itself
+      } catch (e) { /* fall through to the browser download */ }
+      canvas.toBlob((blob) => {
+        if (!blob) { toast(t('toastSaveFailed')); resolve(false); return; }
+        const obj = URL.createObjectURL(blob);
+        const a = h('a', { href: obj, download: name });
+        root.append(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(obj), 2000);
+        toast(t('toastSaved', { name }));
+        resolve(true);
+      }, 'image/png');
+    });
+  }
   // Saves a picture: through the Android app when it hosts the page, otherwise as a browser download,
   // and if the picture host refuses cross-origin reads, in a new tab to save from there.
   async function saveImage(url, name) {
@@ -1336,6 +1564,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
         toast(ok ? t('toastSaved', { name }) : t('toastSaveFailed'));
         return;
       }
+      if (HOST === 'android') { toast(t('needUpdate')); return; }
     } catch (e) { /* fall through */ }
     try {
       const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
@@ -1444,6 +1673,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     const following = new Map(snap.following.map((r) => [r.u, r]));
     const followers = new Map(snap.followers.map((r) => [r.u, r]));
     state.lists = derive(following, followers);
+    state.left = lostSince(state.hist && Array.isArray(state.hist.events) ? state.hist.events : []);
     ui.results.hidden = false;
     const nf = following.size, nw = followers.size;
     ui.ledger.textContent = t('ledger', { nf: num(nf), nfRaw: nf, nw: num(nw), nwRaw: nw });
@@ -1462,7 +1692,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     const nf = state.snap.following.length, nw = state.snap.followers.length;
     const protectedN = L.notback.filter((r) => isProtected(r.u)).length;
     const shown = L.notback.length - protectedN;
-    setTile('notback', num(shown), t('subOfFollowing', { pct: pct(shown, nf) }) + (protectedN ? ' · ' + t('nProtected', { n: num(protectedN) }) : ''));
+    const leftN = whoLeft(L.notback.filter((r) => !isProtected(r.u)), state.left).length;
+    setTile('notback', num(shown), t('subOfFollowing', { pct: pct(shown, nf) })
+      + (leftN ? ' · ' + t('nLeft', { n: num(leftN) }) : '')
+      + (protectedN ? ' · ' + t('nProtected', { n: num(protectedN) }) : ''));
     setTile('fans', num(L.fans.length), t('subOfFollowers', { pct: pct(L.fans.length, nw) }));
     setTile('mutual', num(L.mutual.length), t('subOfFollowing', { pct: pct(L.mutual.length, nf) }));
     const pts = state.hist && Array.isArray(state.hist.points) ? state.hist.points : [];
@@ -1531,6 +1764,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
         toast(ok ? t('toastSaved', { name }) : t('toastSaveFailed'));
         return;
       }
+      if (HOST === 'android') { toast(t('needUpdate')); return; }
     } catch (e) { /* fall through to the browser download */ }
     try {
       const blob = new Blob([text], { type: mime + ';charset=utf-8' });
@@ -1591,6 +1825,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       r.name ? h('div', { class: 'name', title: r.name }, r.name) : null));
     if (r.ver) row.append(h('span', { class: 'tag ver' }, t('verifiedTag')));
     if (r.priv) row.append(h('span', { class: 'tag' }, t('privateTag')));
+    if (withCheck && state.tab === 'notback' && state.left.has(r.u)) row.append(h('span', { class: 'chip warn' }, t('leftChip', { d: fmtMD(state.left.get(r.u)) })));
     if (withCheck && state.tab === 'notback' && r.id) {
       // Two taps within four seconds: the first arms the button, the second unfollows.
       const ub = h('button', { class: 'unf', type: 'button', title: t('unfollowTitle') }, t('unfollow'));
@@ -1667,6 +1902,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   function listRows() {
     let rows = visible(state.lists[state.tab]);
     if (state.tab === 'notback' && !state.showProtected) rows = rows.filter((r) => !isProtected(r.u));
+    if (state.tab === 'notback' && state.onlyLeft) rows = rows.filter((r) => state.left.has(r.u));
     if (state.hideDone) rows = rows.filter((r) => !isDone(r.u));
     if (state.kind !== 'all') rows = rows.filter((r) => matchesKind(r, state.kind));
     return rows.slice().sort((a, b) => (a.u < b.u ? -1 : a.u > b.u ? 1 : 0));
@@ -1694,6 +1930,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.hideDoneWrap.hidden = history || prot;
     ui.kindFilter.hidden = history || prot;
     ui.showProtectedWrap.hidden = state.tab !== 'notback';
+    const leftRows = whoLeft(state.lists.notback.filter((r) => !isProtected(r.u)), state.left);
+    ui.onlyLeftWrap.hidden = state.tab !== 'notback' || !leftRows.length;
+    if (ui.onlyLeftWrap.hidden && state.onlyLeft) { state.onlyLeft = false; ui.onlyLeft.checked = false; } // a hidden filter must not keep filtering
+    ui.share.hidden = prot;
     ui.prot.hidden = !prot;
     ui.list.hidden = prot;
     ui.empty.hidden = true;
@@ -1739,7 +1979,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   function renderHistory() {
     const hist = state.hist && Array.isArray(state.hist.points) ? state.hist : { points: [], events: [] };
     const pts = hist.points;
-    ui.chart.replaceChildren(buildChart(pts));
+    ui.chart.replaceChildren(buildStats(computeStats(pts, Date.now())), buildChart(pts));
     const all = Array.isArray(hist.events) ? hist.events : [];
     const gained = all.filter((e) => e.type === 'gained').length;
     const lost = all.filter((e) => e.type === 'lost').length;
@@ -1768,6 +2008,18 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       ui.empty.textContent = pts.length < 2 ? t('histEmptyFirst')
         : (state.q.trim() || state.evFilter !== 'all') ? t('histEmptyFilter') : t('histEmptyNone');
     }
+  }
+  // Four small numbers above the chart: follow-back rate, this week, best and worst check.
+  function buildStats(s) {
+    const wrap = h('div', { class: 'stats' });
+    if (!s) return wrap;
+    const signed = (v) => (v >= 0 ? '+' : '−') + num(Math.abs(v));
+    const stat = (value, label) => h('div', { class: 'stat' }, h('div', { class: 'value' }, value), h('div', { class: 'label' }, label));
+    wrap.append(stat(s.rate + '%', t('statRate')));
+    wrap.append(s.week ? stat(signed(s.week.followers), t('statWeek', { since: fmtMD(s.week.since) })) : stat('—', t('statNeedMore')));
+    wrap.append(s.best ? stat(signed(s.best.delta), t('statBest', { d: fmtMD(s.best.at) })) : stat('—', t('statNeedMore')));
+    wrap.append(s.worst ? stat(signed(s.worst.delta), t('statWorst', { d: fmtMD(s.worst.at) })) : stat('—', t('statNeedMore')));
+    return wrap;
   }
   const SVG_NS = 'http://www.w3.org/2000/svg';
   function s(tag, attrs, text) {

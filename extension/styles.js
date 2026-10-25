@@ -165,6 +165,12 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .chart circle.s2 { fill: var(--c2); stroke: var(--bg); stroke-width: 2; }
 .chart .cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
 .cnote { padding: 14px 6px; color: var(--muted); font-size: 13px; text-align: center; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; }
+.drawer.narrow .stats { grid-template-columns: repeat(2, 1fr); }
+.stat { border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: grid; gap: 2px; align-content: start; min-width: 0; }
+.stat .value { font-size: 22px; font-weight: 600; line-height: 1.15; direction: ltr; unicode-bidi: isolate; overflow-wrap: anywhere; }
+.stat .label { font-size: 11.5px; line-height: 1.3; color: var(--muted); }
+.lbopt { color: #FFFFFF; font-size: 13px; display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
 .ctip { position: absolute; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px; line-height: 1.4; box-shadow: 0 6px 20px var(--shadow); pointer-events: none; width: 190px; }
 .ctipd { color: var(--muted); margin-bottom: 2px; }
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); padding: 6px 4px 0; }

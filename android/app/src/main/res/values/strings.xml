@@ -5,4 +5,5 @@
     <string name="intro_body">Log in to Instagram as usual. Then tap the Follow check button at the bottom of the page to see who doesn\'t follow you back.</string>
     <string name="intro_ok">Got it</string>
     <string name="saved_to_downloads">Saved %1$s to Downloads</string>
+    <string name="saved_to_app_folder">Saved %1$s in the app folder (Android/data)</string>
 </resources>

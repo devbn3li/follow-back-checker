@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Base64
 import android.webkit.JavascriptInterface
 import android.widget.Toast
 import java.io.File
@@ -18,8 +19,21 @@ import java.io.File
  */
 class HostBridge(private val activity: Activity) {
     @JavascriptInterface
-    fun saveText(name: String, mime: String, text: String): Boolean {
-        val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80).ifEmpty { "follow-check.txt" }
+    fun saveText(name: String, mime: String, text: String): Boolean =
+        saveBytes(name, mime, text.toByteArray(Charsets.UTF_8))
+
+    /** Saves a drawn image the page hands over as base64 (the share card). */
+    @JavascriptInterface
+    fun saveBase64(name: String, mime: String, base64: String): Boolean {
+        val bytes = try { Base64.decode(base64, Base64.DEFAULT) } catch (e: Exception) { return false }
+        return saveBytes(name, mime, bytes)
+    }
+
+    private fun saveBytes(name: String, mime: String, bytes: ByteArray): Boolean {
+        // Only the kinds of files the checker produces; the page must not be able to drop anything else.
+        if (mime !in ALLOWED_MIME || bytes.size > MAX_BYTES) return false
+        val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80).ifEmpty { "follow-check.bin" }
+        if (safe.endsWith(".apk", ignoreCase = true) || safe.endsWith(".html", ignoreCase = true)) return false
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val values = ContentValues().apply {
@@ -30,18 +44,24 @@ class HostBridge(private val activity: Activity) {
                 val resolver = activity.contentResolver
                 val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
                 val stream = resolver.openOutputStream(uri) ?: return false
-                stream.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                stream.use { it.write(bytes) }
             } else {
                 val dir = activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: return false
-                File(dir, safe).writeText(text)
+                File(dir, safe).writeBytes(bytes)
             }
+            val message = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) R.string.saved_to_downloads else R.string.saved_to_app_folder
             activity.runOnUiThread {
-                Toast.makeText(activity, activity.getString(R.string.saved_to_downloads, safe), Toast.LENGTH_SHORT).show()
+                Toast.makeText(activity, activity.getString(message, safe), Toast.LENGTH_SHORT).show()
             }
             true
         } catch (e: Exception) {
             false
         }
+    }
+
+    companion object {
+        private val ALLOWED_MIME = setOf("text/csv", "application/json", "text/plain", "image/png", "image/jpeg")
+        private const val MAX_BYTES = 25 * 1024 * 1024
     }
 
     /** Downloads a picture (an https link) into Downloads through the system download manager. */
