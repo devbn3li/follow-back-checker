@@ -165,6 +165,10 @@
     unfollowWarn: 'Unfollowing many accounts quickly makes Instagram block actions on your account for a day or more. This button works one account at a time, 20 seconds apart, at most {h} per hour and {d} per day, and pauses for two hours if Instagram objects. Use it for a few accounts at a time.',
     unfollowWarnOk: 'I understand',
     unfollowQuota: '{h} unfollows left this hour, {d} today',
+    lbFull: 'Full size',
+    lbSave: 'Save image',
+    lbFullFailed: 'Could not load the full size: {r}',
+    toastImgOpen: 'Opened in a new tab; save it from there.',
   };
 
   const ar = {
@@ -325,6 +329,10 @@
     unfollowWarn: 'إلغاء متابعة حسابات كتير بسرعة بيخلي إنستجرام يقفل الأكشنات على حسابك يوم أو أكتر. الزرار ده بيشتغل حساب حساب، كل 20 ثانية، بحد أقصى {h} في الساعة و{d} في اليوم، وبيقف ساعتين لو إنستجرام اعترض. استخدمه لكام حساب في المرة.',
     unfollowWarnOk: 'فاهم',
     unfollowQuota: 'باقي {h} إلغاء الساعة دي، {d} النهاردة',
+    lbFull: 'الحجم الكامل',
+    lbSave: 'حفظ الصورة',
+    lbFullFailed: 'مقدرناش نجيب الحجم الكامل: {r}',
+    toastImgOpen: 'اتفتحت في تاب جديد، احفظها من هناك.',
   };
 
   return { en, ar };

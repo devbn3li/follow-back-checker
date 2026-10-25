@@ -1,4 +1,4 @@
-/* Follow Back Checker 1.4.1. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+/* Follow Back Checker 1.5.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
 // Panel styles. Injected into a shadow root by content.js, so Instagram's own CSS cannot leak in
 // and a strict page CSP cannot block them (they go in through a constructed stylesheet).
 var FBC_CSS = `
@@ -119,8 +119,14 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .chip.good { color: var(--good); border-color: var(--good); }
 .chip.warn { color: var(--warn); border-color: var(--warn); }
 .chip.live { color: var(--fg); border-color: var(--accent); }
-.avatar { flex: none; width: 28px; height: 28px; border-radius: 50%; object-fit: cover; background: var(--bg2); }
-.avatar.ph { display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--muted); }
+.avatar { flex: none; width: 28px; height: 28px; border-radius: 50%; object-fit: cover; background: var(--bg2); cursor: zoom-in; }
+.avatar.ph { display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--muted); cursor: default; }
+.lightbox { position: fixed; inset: 0; z-index: 2147483647; background: rgba(0, 0, 0, 0.75); display: grid; place-items: center; padding: 16px; }
+.lbbox { display: grid; justify-items: center; gap: 10px; max-width: 100%; }
+.lbimg { max-width: min(90vw, 480px); max-height: 70vh; border-radius: 12px; background: var(--bg2); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); }
+.lbname { color: #FFFFFF; font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; font-size: 14px; direction: ltr; }
+.lbbar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.lightbox .btn { background: var(--bg); }
 .tag.ver { color: var(--accent); border-color: var(--accent); }
 .protect { flex: none; background: none; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted); padding: 2px 7px; cursor: pointer; white-space: nowrap; }
 .protect:hover { border-color: var(--accent); color: var(--fg); }
@@ -548,6 +554,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     unfollowWarn: 'Unfollowing many accounts quickly makes Instagram block actions on your account for a day or more. This button works one account at a time, 20 seconds apart, at most {h} per hour and {d} per day, and pauses for two hours if Instagram objects. Use it for a few accounts at a time.',
     unfollowWarnOk: 'I understand',
     unfollowQuota: '{h} unfollows left this hour, {d} today',
+    lbFull: 'Full size',
+    lbSave: 'Save image',
+    lbFullFailed: 'Could not load the full size: {r}',
+    toastImgOpen: 'Opened in a new tab; save it from there.',
   };
 
   const ar = {
@@ -708,6 +718,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     unfollowWarn: 'إلغاء متابعة حسابات كتير بسرعة بيخلي إنستجرام يقفل الأكشنات على حسابك يوم أو أكتر. الزرار ده بيشتغل حساب حساب، كل 20 ثانية، بحد أقصى {h} في الساعة و{d} في اليوم، وبيقف ساعتين لو إنستجرام اعترض. استخدمه لكام حساب في المرة.',
     unfollowWarnOk: 'فاهم',
     unfollowQuota: 'باقي {h} إلغاء الساعة دي، {d} النهاردة',
+    lbFull: 'الحجم الكامل',
+    lbSave: 'حفظ الصورة',
+    lbFullFailed: 'مقدرناش نجيب الحجم الكامل: {r}',
+    toastImgOpen: 'اتفتحت في تاب جديد، احفظها من هناك.',
   };
 
   return { en, ar };
@@ -1133,7 +1147,15 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       ui.toast,
       ui.modal,
     );
-    root.append(ui.fabwrap, ui.drawer);
+    // Picture viewer: the thumbnail first, the full size on request, and a save button.
+    ui.lbImg = h('img', { class: 'lbimg', alt: '' });
+    ui.lbName = h('div', { class: 'lbname' });
+    ui.lbFull = h('button', { class: 'btn small', type: 'button', onclick: () => loadFullSize() });
+    ui.lbSave = h('button', { class: 'btn small primary', type: 'button', onclick: () => saveCurrentImage() });
+    ui.lbClose = h('button', { class: 'btn small', type: 'button', onclick: () => closeLightbox() });
+    ui.lightbox = h('div', { class: 'lightbox', hidden: true, onclick: (e) => { if (e.target === ui.lightbox) closeLightbox(); } },
+      h('div', { class: 'lbbox' }, ui.lbImg, ui.lbName, h('div', { class: 'lbbar' }, ui.lbFull, ui.lbSave, ui.lbClose)));
+    root.append(ui.fabwrap, ui.drawer, ui.lightbox);
     relabel();
     wireResize();
     applyWidth(state.width);
@@ -1172,9 +1194,77 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.protText.placeholder = t('protectedPlaceholder');
     ui.protHint.textContent = t('protectedHint');
     updateProtectedBtn();
+    ui.lbFull.textContent = t('lbFull');
+    ui.lbSave.textContent = t('lbSave');
+    ui.lbClose.textContent = t('close');
     ui.foot.textContent = t('footer');
     ui.grip.title = t('gripTitle');
     ui.rel.title = t('pillTitle');
+  }
+  // --- picture viewer
+  const lb = { rec: null, url: '', hd: false };
+  function openLightbox(rec) {
+    if (!rec || !rec.pic) return;
+    lb.rec = rec; lb.url = rec.pic; lb.hd = false;
+    ui.lbImg.src = rec.pic;
+    ui.lbName.textContent = '@' + rec.u;
+    ui.lbFull.hidden = false;
+    ui.lbFull.disabled = false;
+    ui.lbFull.textContent = t('lbFull');
+    ui.lightbox.hidden = false;
+  }
+  function closeLightbox() { ui.lightbox.hidden = true; }
+  // One profile-info request, the same one the site makes, for the large picture.
+  async function loadFullSize() {
+    const rec = lb.rec;
+    if (!rec) return;
+    if (Date.now() < state.cooldownUntil) { toast(t('pillPaused', { t: fmtT(state.cooldownUntil) })); return; }
+    ui.lbFull.disabled = true;
+    ui.lbFull.textContent = t('pillChecking');
+    try {
+      const j = await igGet('/api/v1/users/web_profile_info/?username=' + encodeURIComponent(rec.u));
+      const u = j && j.data && j.data.user;
+      const hd = u && typeof u.profile_pic_url_hd === 'string' ? u.profile_pic_url_hd : (u && typeof u.profile_pic_url === 'string' ? u.profile_pic_url : '');
+      if (!hd || !/^https:\/\//.test(hd)) throw new Error('no picture');
+      lb.url = hd; lb.hd = true;
+      ui.lbImg.src = hd;
+      ui.lbFull.hidden = true;
+    } catch (e) {
+      if (e instanceof RateLimited) { state.cooldownUntil = Date.now() + REL_COOLDOWN_MS; saveUi(); }
+      toast(t('lbFullFailed', { r: e && e.message ? e.message : String(e) }));
+      ui.lbFull.disabled = false;
+      ui.lbFull.textContent = t('lbFull');
+    }
+  }
+  function saveCurrentImage() {
+    if (!lb.rec || !lb.url) return;
+    saveImage(lb.url, lb.rec.u + (lb.hd ? '-full' : '') + '.jpg');
+  }
+  // Saves a picture: through the Android app when it hosts the page, otherwise as a browser download,
+  // and if the picture host refuses cross-origin reads, in a new tab to save from there.
+  async function saveImage(url, name) {
+    try {
+      const bridge = window.FollowCheckHost;
+      if (bridge && typeof bridge.saveUrl === 'function') {
+        const ok = bridge.saveUrl(url, name);
+        toast(ok ? t('toastSaved', { name }) : t('toastSaveFailed'));
+        return;
+      }
+    } catch (e) { /* fall through */ }
+    try {
+      const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const blob = await res.blob();
+      const obj = URL.createObjectURL(blob);
+      const a = h('a', { href: obj, download: name });
+      root.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(obj), 2000);
+      toast(t('toastSaved', { name }));
+    } catch (e) {
+      const a = h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' });
+      root.append(a); a.click(); a.remove();
+      toast(t('toastImgOpen'));
+    }
   }
   function updateProtectedBtn() { ui.protectedBtn.textContent = t('protectedBtn', { n: num(Object.keys(state.white).length) }); }
   // A yes/no box inside the panel (the viewer never shows window.confirm).
@@ -1391,7 +1481,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   }
   function avatarNode(r) {
     if (r.pic) {
-      const img = h('img', { class: 'avatar', src: r.pic, alt: '', loading: 'lazy' });
+      const img = h('img', { class: 'avatar', src: r.pic, alt: '', loading: 'lazy', onclick: () => openLightbox(r) });
       // Instagram's picture links expire after a while; fall back to the first letter.
       img.addEventListener('error', () => img.replaceWith(h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase())));
       return img;
@@ -2067,5 +2157,9 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       });
     }
   } catch (e) { /* not running as an extension */ }
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.open) toggle(false); }, true);
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!ui.lightbox.hidden) { closeLightbox(); return; }
+    if (state.open) toggle(false);
+  }, true);
 })();

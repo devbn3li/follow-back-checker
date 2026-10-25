@@ -1,7 +1,10 @@
 package io.github.devbn3li.followcheck
 
 import android.app.Activity
+import android.app.DownloadManager
 import android.content.ContentValues
+import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -32,6 +35,28 @@ class HostBridge(private val activity: Activity) {
                 val dir = activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: return false
                 File(dir, safe).writeText(text)
             }
+            activity.runOnUiThread {
+                Toast.makeText(activity, activity.getString(R.string.saved_to_downloads, safe), Toast.LENGTH_SHORT).show()
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** Downloads a picture (an https link) into Downloads through the system download manager. */
+    @JavascriptInterface
+    fun saveUrl(url: String, name: String): Boolean {
+        return try {
+            val uri = Uri.parse(url)
+            if (uri.scheme != "https") return false
+            val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80).ifEmpty { "image.jpg" }
+            val request = DownloadManager.Request(uri)
+                .setTitle(safe)
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, safe)
+            val manager = activity.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            manager.enqueue(request)
             activity.runOnUiThread {
                 Toast.makeText(activity, activity.getString(R.string.saved_to_downloads, safe), Toast.LENGTH_SHORT).show()
             }

@@ -417,7 +417,15 @@
       ui.toast,
       ui.modal,
     );
-    root.append(ui.fabwrap, ui.drawer);
+    // Picture viewer: the thumbnail first, the full size on request, and a save button.
+    ui.lbImg = h('img', { class: 'lbimg', alt: '' });
+    ui.lbName = h('div', { class: 'lbname' });
+    ui.lbFull = h('button', { class: 'btn small', type: 'button', onclick: () => loadFullSize() });
+    ui.lbSave = h('button', { class: 'btn small primary', type: 'button', onclick: () => saveCurrentImage() });
+    ui.lbClose = h('button', { class: 'btn small', type: 'button', onclick: () => closeLightbox() });
+    ui.lightbox = h('div', { class: 'lightbox', hidden: true, onclick: (e) => { if (e.target === ui.lightbox) closeLightbox(); } },
+      h('div', { class: 'lbbox' }, ui.lbImg, ui.lbName, h('div', { class: 'lbbar' }, ui.lbFull, ui.lbSave, ui.lbClose)));
+    root.append(ui.fabwrap, ui.drawer, ui.lightbox);
     relabel();
     wireResize();
     applyWidth(state.width);
@@ -456,9 +464,77 @@
     ui.protText.placeholder = t('protectedPlaceholder');
     ui.protHint.textContent = t('protectedHint');
     updateProtectedBtn();
+    ui.lbFull.textContent = t('lbFull');
+    ui.lbSave.textContent = t('lbSave');
+    ui.lbClose.textContent = t('close');
     ui.foot.textContent = t('footer');
     ui.grip.title = t('gripTitle');
     ui.rel.title = t('pillTitle');
+  }
+  // --- picture viewer
+  const lb = { rec: null, url: '', hd: false };
+  function openLightbox(rec) {
+    if (!rec || !rec.pic) return;
+    lb.rec = rec; lb.url = rec.pic; lb.hd = false;
+    ui.lbImg.src = rec.pic;
+    ui.lbName.textContent = '@' + rec.u;
+    ui.lbFull.hidden = false;
+    ui.lbFull.disabled = false;
+    ui.lbFull.textContent = t('lbFull');
+    ui.lightbox.hidden = false;
+  }
+  function closeLightbox() { ui.lightbox.hidden = true; }
+  // One profile-info request, the same one the site makes, for the large picture.
+  async function loadFullSize() {
+    const rec = lb.rec;
+    if (!rec) return;
+    if (Date.now() < state.cooldownUntil) { toast(t('pillPaused', { t: fmtT(state.cooldownUntil) })); return; }
+    ui.lbFull.disabled = true;
+    ui.lbFull.textContent = t('pillChecking');
+    try {
+      const j = await igGet('/api/v1/users/web_profile_info/?username=' + encodeURIComponent(rec.u));
+      const u = j && j.data && j.data.user;
+      const hd = u && typeof u.profile_pic_url_hd === 'string' ? u.profile_pic_url_hd : (u && typeof u.profile_pic_url === 'string' ? u.profile_pic_url : '');
+      if (!hd || !/^https:\/\//.test(hd)) throw new Error('no picture');
+      lb.url = hd; lb.hd = true;
+      ui.lbImg.src = hd;
+      ui.lbFull.hidden = true;
+    } catch (e) {
+      if (e instanceof RateLimited) { state.cooldownUntil = Date.now() + REL_COOLDOWN_MS; saveUi(); }
+      toast(t('lbFullFailed', { r: e && e.message ? e.message : String(e) }));
+      ui.lbFull.disabled = false;
+      ui.lbFull.textContent = t('lbFull');
+    }
+  }
+  function saveCurrentImage() {
+    if (!lb.rec || !lb.url) return;
+    saveImage(lb.url, lb.rec.u + (lb.hd ? '-full' : '') + '.jpg');
+  }
+  // Saves a picture: through the Android app when it hosts the page, otherwise as a browser download,
+  // and if the picture host refuses cross-origin reads, in a new tab to save from there.
+  async function saveImage(url, name) {
+    try {
+      const bridge = window.FollowCheckHost;
+      if (bridge && typeof bridge.saveUrl === 'function') {
+        const ok = bridge.saveUrl(url, name);
+        toast(ok ? t('toastSaved', { name }) : t('toastSaveFailed'));
+        return;
+      }
+    } catch (e) { /* fall through */ }
+    try {
+      const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const blob = await res.blob();
+      const obj = URL.createObjectURL(blob);
+      const a = h('a', { href: obj, download: name });
+      root.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(obj), 2000);
+      toast(t('toastSaved', { name }));
+    } catch (e) {
+      const a = h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' });
+      root.append(a); a.click(); a.remove();
+      toast(t('toastImgOpen'));
+    }
   }
   function updateProtectedBtn() { ui.protectedBtn.textContent = t('protectedBtn', { n: num(Object.keys(state.white).length) }); }
   // A yes/no box inside the panel (the viewer never shows window.confirm).
@@ -675,7 +751,7 @@
   }
   function avatarNode(r) {
     if (r.pic) {
-      const img = h('img', { class: 'avatar', src: r.pic, alt: '', loading: 'lazy' });
+      const img = h('img', { class: 'avatar', src: r.pic, alt: '', loading: 'lazy', onclick: () => openLightbox(r) });
       // Instagram's picture links expire after a while; fall back to the first letter.
       img.addEventListener('error', () => img.replaceWith(h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase())));
       return img;
@@ -1351,5 +1427,9 @@
       });
     }
   } catch (e) { /* not running as an extension */ }
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.open) toggle(false); }, true);
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!ui.lightbox.hidden) { closeLightbox(); return; }
+    if (state.open) toggle(false);
+  }, true);
 })();

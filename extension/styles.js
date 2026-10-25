@@ -118,8 +118,14 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .chip.good { color: var(--good); border-color: var(--good); }
 .chip.warn { color: var(--warn); border-color: var(--warn); }
 .chip.live { color: var(--fg); border-color: var(--accent); }
-.avatar { flex: none; width: 28px; height: 28px; border-radius: 50%; object-fit: cover; background: var(--bg2); }
-.avatar.ph { display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--muted); }
+.avatar { flex: none; width: 28px; height: 28px; border-radius: 50%; object-fit: cover; background: var(--bg2); cursor: zoom-in; }
+.avatar.ph { display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--muted); cursor: default; }
+.lightbox { position: fixed; inset: 0; z-index: 2147483647; background: rgba(0, 0, 0, 0.75); display: grid; place-items: center; padding: 16px; }
+.lbbox { display: grid; justify-items: center; gap: 10px; max-width: 100%; }
+.lbimg { max-width: min(90vw, 480px); max-height: 70vh; border-radius: 12px; background: var(--bg2); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); }
+.lbname { color: #FFFFFF; font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; font-size: 14px; direction: ltr; }
+.lbbar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.lightbox .btn { background: var(--bg); }
 .tag.ver { color: var(--accent); border-color: var(--accent); }
 .protect { flex: none; background: none; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted); padding: 2px 7px; cursor: pointer; white-space: nowrap; }
 .protect:hover { border-color: var(--accent); color: var(--fg); }
