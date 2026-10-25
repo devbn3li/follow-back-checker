@@ -104,10 +104,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 
 .list { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .list > * + * { border-top: 1px solid var(--border); }
-.row { display: flex; gap: 10px; align-items: center; padding: 8px 12px; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 8px 12px; min-width: 0; }
 .row.done { opacity: 0.5; }
 .row.done .handle { text-decoration: line-through; }
-.who { flex: 1 1 auto; min-width: 0; display: grid; gap: 1px; align-content: center; }
+.who { flex: 1 1 160px; min-width: 140px; display: grid; gap: 1px; align-content: center; }
 .handle { flex: none; font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; font-size: 13.5px; font-weight: 500; color: var(--fg); text-decoration: none; overflow-wrap: anywhere; direction: ltr; unicode-bidi: isolate; }
 .handle:hover { color: var(--accent); text-decoration: underline; }
 .handle .arrow { color: var(--muted); font-size: 12px; margin-left: 4px; }

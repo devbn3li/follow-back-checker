@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Follow Back Checker",
-  "version": "1.10.0",
+  "version": "1.10.1",
   "description": "One click on instagram.com: who you follow that doesn't follow you back, using your own logged-in session. Nothing leaves the browser.",
   "permissions": ["storage", "activeTab"],
   "action": { "default_title": "Follow Back Checker (opens on instagram.com)" },

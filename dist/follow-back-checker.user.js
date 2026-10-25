@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Follow Back Checker
 // @namespace    https://github.com/devbn3li/follow-back-checker
-// @version      1.10.0
+// @version      1.10.1
 // @description  Who you follow that does not follow you back, from your own logged-in instagram.com session. Nothing leaves the browser.
 // @author       devbn3li
 // @match        https://www.instagram.com/*
@@ -11,7 +11,7 @@
 // @downloadURL  https://raw.githubusercontent.com/devbn3li/follow-back-checker/main/dist/follow-back-checker.user.js
 // ==/UserScript==
 
-/* Follow Back Checker 1.10.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+/* Follow Back Checker 1.10.1. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
 // Panel styles. Injected into a shadow root by content.js, so Instagram's own CSS cannot leak in
 // and a strict page CSP cannot block them (they go in through a constructed stylesheet).
 var FBC_CSS = `
@@ -118,10 +118,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 
 .list { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .list > * + * { border-top: 1px solid var(--border); }
-.row { display: flex; gap: 10px; align-items: center; padding: 8px 12px; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 8px 12px; min-width: 0; }
 .row.done { opacity: 0.5; }
 .row.done .handle { text-decoration: line-through; }
-.who { flex: 1 1 auto; min-width: 0; display: grid; gap: 1px; align-content: center; }
+.who { flex: 1 1 160px; min-width: 140px; display: grid; gap: 1px; align-content: center; }
 .handle { flex: none; font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; font-size: 13.5px; font-weight: 500; color: var(--fg); text-decoration: none; overflow-wrap: anywhere; direction: ltr; unicode-bidi: isolate; }
 .handle:hover { color: var(--accent); text-decoration: underline; }
 .handle .arrow { color: var(--muted); font-size: 12px; margin-left: 4px; }
@@ -261,12 +261,19 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     if (prev.me && last.me && prev.me.toLowerCase() !== last.me.toLowerCase()) return null;
     const names = (rows) => new Set(rows.map((r) => r.u));
     const pf = names(prev.followers), lf = names(last.followers), pg = names(prev.following), lg = names(last.following);
+    // An account that was in both of your lists and is now in neither did not unfollow you while you
+    // unfollowed it in the same breath: it deactivated (or was removed). The mirror image is one that
+    // shows up in both lists at once, which is a deactivated account coming back or a brand-new mutual.
+    const goneNames = new Set(prev.following.filter((r) => pf.has(r.u) && !lg.has(r.u) && !lf.has(r.u)).map((r) => r.u));
+    const backNames = new Set(last.following.filter((r) => lf.has(r.u) && !pg.has(r.u) && !pf.has(r.u)).map((r) => r.u));
     return {
       since: prev.at,
-      gained: last.followers.filter((r) => !pf.has(r.u)),
-      lost: prev.followers.filter((r) => !lf.has(r.u)),
-      youFollowed: last.following.filter((r) => !pg.has(r.u)),
-      youUnfollowed: prev.following.filter((r) => !lg.has(r.u)),
+      gained: last.followers.filter((r) => !pf.has(r.u) && !backNames.has(r.u)),
+      lost: prev.followers.filter((r) => !lf.has(r.u) && !goneNames.has(r.u)),
+      youFollowed: last.following.filter((r) => !pg.has(r.u) && !backNames.has(r.u)),
+      youUnfollowed: prev.following.filter((r) => !lg.has(r.u) && !goneNames.has(r.u)),
+      gone: prev.following.filter((r) => goneNames.has(r.u)),
+      back: last.following.filter((r) => backNames.has(r.u)),
     };
   }
 
@@ -279,10 +286,80 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     for (const r of snap.following) if (followers.has(r.u)) mutual++;
     return { at: snap.at, following: snap.following.length, followers: snap.followers.length, mutual, notback: snap.following.length - mutual };
   }
-  function eventsFrom(d, at) {
+  // priorGone: usernames whose account is currently recorded as deactivated (see goneSet). An account
+  // that comes back to both lists is 'reactivated' when we saw it go; otherwise it is a new mutual follow.
+  function eventsFrom(d, at, priorGone) {
     if (!d) return [];
-    const mk = (type, rows) => rows.map((r) => ({ at, type, u: r.u, name: r.name || '', priv: !!r.priv }));
-    return [...mk('gained', d.gained), ...mk('lost', d.lost), ...mk('you_followed', d.youFollowed), ...mk('you_unfollowed', d.youUnfollowed)];
+    const gone = priorGone || new Set();
+    const mk = (type, rows) => (rows || []).map((r) => ({ at, type, u: r.u, name: r.name || '', priv: !!r.priv }));
+    const back = d.back || [];
+    const returned = back.filter((r) => gone.has(r.u));
+    const fresh = back.filter((r) => !gone.has(r.u));
+    return [
+      ...mk('gained', d.gained), ...mk('lost', d.lost),
+      ...mk('you_followed', d.youFollowed), ...mk('you_unfollowed', d.youUnfollowed),
+      ...mk('deactivated', d.gone), ...mk('reactivated', returned),
+      ...mk('gained', fresh), ...mk('you_followed', fresh),
+    ];
+  }
+  // Well-formed events, oldest first. Stored histories are trusted, but a damaged entry must not break a load.
+  function validEvents(events) {
+    return (Array.isArray(events) ? events : []).filter((e) => e && typeof e.u === 'string' && typeof e.at === 'number').sort((a, b) => a.at - b.at);
+  }
+  // Usernames whose latest deactivated/reactivated event says they are away right now.
+  function goneSet(events) {
+    const state = new Map();
+    for (const e of validEvents(events)) {
+      if (e.type === 'deactivated') state.set(e.u, true);
+      else if (e.type === 'reactivated' || e.type === 'gained' || e.type === 'you_followed') state.set(e.u, false);
+    }
+    return new Set([...state.entries()].filter(([, away]) => away).map(([u]) => u));
+  }
+  // Accounts that deactivated and came back: username -> { goneAt, backAt } of the latest such pair.
+  function reactivations(events) {
+    const away = new Map(), out = new Map();
+    for (const e of validEvents(events)) {
+      if (e.type === 'deactivated') { away.set(e.u, e.at); out.delete(e.u); }
+      else if (e.type === 'reactivated' && away.has(e.u)) { out.set(e.u, { goneAt: away.get(e.u), backAt: e.at }); away.delete(e.u); }
+    }
+    return out;
+  }
+  // Histories recorded before deactivations were understood hold a 'lost' and a 'you_unfollowed' for
+  // the same account at the same check (and later a 'gained' plus 'you_followed'). Fold those pairs
+  // into 'deactivated' / 'reactivated'. Idempotent; returns the same array when nothing changes.
+  function reclassifyEvents(events) {
+    const list = validEvents(events); // a damaged entry is dropped, which counts as a change
+    const key = (e) => e.at + '\u0000' + e.u;
+    const types = new Map();
+    for (const e of list) {
+      const k = key(e);
+      if (!types.has(k)) types.set(k, new Set());
+      types.get(k).add(e.type);
+    }
+    const isGone = (e) => { const s = types.get(key(e)); return s && s.has('lost') && s.has('you_unfollowed'); };
+    const isBack = (e) => { const s = types.get(key(e)); return s && s.has('gained') && s.has('you_followed'); };
+    let changed = list.length !== (Array.isArray(events) ? events.length : 0);
+    const out = [];
+    const away = new Set();
+    const folded = new Set(); // at+user pairs already turned into a reactivation, so the twin is dropped too
+    for (const e of list) {
+      if (e.type === 'deactivated') { away.add(e.u); out.push(e); continue; }
+      if (e.type === 'reactivated') { away.delete(e.u); out.push(e); continue; }
+      if ((e.type === 'lost' || e.type === 'you_unfollowed') && isGone(e)) {
+        changed = true;
+        if (e.type === 'lost') { out.push(Object.assign({}, e, { type: 'deactivated' })); away.add(e.u); }
+        continue; // the you_unfollowed twin is dropped
+      }
+      if ((e.type === 'gained' || e.type === 'you_followed') && isBack(e) && (away.has(e.u) || folded.has(key(e)))) {
+        changed = true;
+        folded.add(key(e));
+        if (e.type === 'gained') { out.push(Object.assign({}, e, { type: 'reactivated' })); away.delete(e.u); }
+        continue; // the you_followed twin is dropped
+      }
+      if (e.type === 'gained' || e.type === 'you_followed') away.delete(e.u);
+      out.push(e);
+    }
+    return changed ? out : events;
   }
   function appendHistory(hist, point, events, caps) {
     const base = hist && Array.isArray(hist.points) && Array.isArray(hist.events) ? hist : { points: [], events: [] };
@@ -299,6 +376,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       lost: list.filter((e) => e.type === 'lost').length,
       youFollowed: list.filter((e) => e.type === 'you_followed').length,
       youUnfollowed: list.filter((e) => e.type === 'you_unfollowed').length,
+      deactivated: list.filter((e) => e.type === 'deactivated').length,
+      reactivated: list.filter((e) => e.type === 'reactivated').length,
     }));
   }
 
@@ -590,7 +669,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     return out;
   }
 
-  return { loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
+  return { loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
 });
 
 ;
@@ -651,6 +730,14 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     histYouUnfollowed: 'you unfollowed {n}',
     evGained: 'followed you',
     evLost: 'unfollowed you',
+    evDeactivated: 'account gone (deactivated or blocked you)',
+    evReactivated: 'account is back',
+    evUnknown: 'changed',
+    histDeactivated: '{n} gone',
+    histReactivated: '{n} came back',
+    filterDeactivated: 'Gone (deactivated or blocked)',
+    filterReactivated: 'Came back',
+    reactChip: 'was deactivated {d}, back now',
     evYouFollowed: 'you followed',
     evYouUnfollowed: 'you unfollowed',
     histEmptyFirst: 'Changes are recorded from your second check on. Run Check now again later and they show up here, with the date.',
@@ -893,6 +980,14 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     histYouUnfollowed: 'إنت سيبت {n}',
     evGained: 'تابعك',
     evLost: 'سابك',
+    evDeactivated: 'الحساب اختفى (قفله أو عمللك بلوك)',
+    evReactivated: 'رجّع حسابه',
+    evUnknown: 'اتغير',
+    histDeactivated: '{n} اختفوا',
+    histReactivated: '{n} رجعوا',
+    filterDeactivated: 'اختفوا (قفلوا أو بلوك)',
+    filterReactivated: 'رجعوا',
+    reactChip: 'كان قافل حسابه {d}، ورجع',
     evYouFollowed: 'إنت تابعته',
     evYouUnfollowed: 'إنت سيبته',
     histEmptyFirst: 'التغييرات بتتسجل من تاني فحص. اعمل فحص تاني بعدين وهتلاقيها هنا بالتاريخ.',
@@ -1108,7 +1203,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -1393,7 +1488,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     changes: { label: 'tileHistory', title: 'titleHistory', empty: '' },
   };
   const freshActions = () => ({ times: [], pausedUntil: 0, warned: false });
-  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), loops: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0, countsPausedUntil: 0 };
+  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), loops: new Map(), react: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0, countsPausedUntil: 0 };
   const live = { following: 0, followers: 0 };
   const ui = {};
   // Small preferences, remembered across visits: language, panel width, and the pause after Instagram asks us to slow down.
@@ -1481,7 +1576,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.sortOpts = ['name', 'followers', 'ratio'].map((v) => h('option', { value: v }));
     ui.sortSel = h('select', { class: 'field sel', onchange: () => { state.sort = ui.sortSel.value; renderList(); } }, ui.sortOpts);
     ui.countsBtn = h('button', { class: 'btn small', type: 'button', onclick: () => loadCounts() });
-    ui.filterOpts = ['all', 'others', 'gained', 'lost', 'you_followed', 'you_unfollowed'].map((v) => h('option', { value: v }));
+    ui.filterOpts = ['all', 'others', 'gained', 'lost', 'you_followed', 'you_unfollowed', 'deactivated', 'reactivated'].map((v) => h('option', { value: v }));
     ui.evFilter = h('select', { class: 'field sel', hidden: true, onchange: () => { state.evFilter = ui.evFilter.value; renderList(); } }, ui.filterOpts);
     ui.copy = h('button', { class: 'btn small', type: 'button', onclick: () => copyList() });
     ui.download = h('button', { class: 'btn small', type: 'button', onclick: () => downloadCurrent() });
@@ -1568,7 +1663,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.search.setAttribute('aria-label', t('searchPh'));
     ui.hideDoneText.textContent = t('hideHandled');
     ui.copy.textContent = t('copyUsernames');
-    const optKeys = ['filterAll', 'filterOthers', 'filterGained', 'filterLost', 'filterYouFollowed', 'filterYouUnfollowed'];
+    const optKeys = ['filterAll', 'filterOthers', 'filterGained', 'filterLost', 'filterYouFollowed', 'filterYouUnfollowed', 'filterDeactivated', 'filterReactivated'];
     ui.filterOpts.forEach((o, i) => { o.textContent = t(optKeys[i]); });
     for (const k of Object.keys(TABS)) ui.tile[k].label.textContent = t(TABS[k].label);
     ui.showProtectedText.textContent = t('showProtected');
@@ -2172,6 +2267,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       row.append(h('span', { class: 'chip warn' }, t(stillFollowsYou ? 'leftBackChip' : 'leftChip', { d: fmtMD(state.left.get(r.u)) })));
     }
     if (state.tab !== 'changes' && state.loops.has(r.u)) row.append(h('span', { class: 'chip' }, t('loopChip', { d: fmtMD(state.loops.get(r.u).followedAt) })));
+    if (state.tab !== 'changes' && state.react && state.react.has(r.u)) row.append(h('span', { class: 'chip' }, t('reactChip', { d: fmtMD(state.react.get(r.u).goneAt) })));
     if (withCheck && state.tab === 'notback' && r.id) {
       // Two taps within four seconds: the first arms the button, the second unfollows.
       const ub = h('button', { class: 'unf', type: 'button', title: t('unfollowTitle') }, t('unfollow'));
@@ -2366,11 +2462,13 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     lost: { key: 'evLost', cls: 'warn' },
     you_followed: { key: 'evYouFollowed', cls: '' },
     you_unfollowed: { key: 'evYouUnfollowed', cls: '' },
+    deactivated: { key: 'evDeactivated', cls: '' },
+    reactivated: { key: 'evReactivated', cls: 'good' },
   };
   function filteredEvents() {
     let evs = state.hist && Array.isArray(state.hist.events) ? state.hist.events : [];
     const f = state.evFilter;
-    if (f === 'others') evs = evs.filter((e) => e.type === 'gained' || e.type === 'lost');
+    if (f === 'others') evs = evs.filter((e) => e.type === 'gained' || e.type === 'lost' || e.type === 'deactivated' || e.type === 'reactivated');
     else if (f !== 'all') evs = evs.filter((e) => e.type === f);
     return visible(evs);
   }
@@ -2393,10 +2491,13 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       if (g.lost) parts.push(t('histLost', { n: num(g.lost) }));
       if (g.youFollowed) parts.push(t('histYouFollowed', { n: num(g.youFollowed) }));
       if (g.youUnfollowed) parts.push(t('histYouUnfollowed', { n: num(g.youUnfollowed) }));
+      if (g.deactivated) parts.push(t('histDeactivated', { n: num(g.deactivated) }));
+      if (g.reactivated) parts.push(t('histReactivated', { n: num(g.reactivated) }));
       ui.list.append(h('div', { class: 'group' }, fmtDT(g.at) + ' · ' + parts.join(' · ')));
       for (const e of g.events) {
         const row = rowNode({ u: e.u, name: e.name, priv: e.priv }, false);
-        row.append(h('span', { class: 'chip ' + EV[e.type].cls }, t(EV[e.type].key)));
+        const ev = EV[e.type] || { key: 'evUnknown', cls: '' };
+        row.append(h('span', { class: 'chip ' + ev.cls }, t(ev.key)));
         ui.list.append(row);
       }
     }
@@ -2539,7 +2640,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       const snap = await runCheck(state.ctl, showProgress);
       if (state.uid !== uid || snap.uid !== uid) throw new Cancelled(); // the account changed mid-check; never mix results
       snap.me = carryMe(snap, state.snap); // the account-info request can be throttled; keep the name we already know
-      state.hist = appendHistory(state.hist, pointFrom(snap), eventsFrom(diff(state.snap, snap), snap.at), HIST_CAPS);
+      const knownEvents = state.hist && Array.isArray(state.hist.events) ? state.hist.events : [];
+      state.hist = appendHistory(state.hist, pointFrom(snap), eventsFrom(diff(state.snap, snap), snap.at, goneSet(knownEvents)), HIST_CAPS);
       state.prev = state.snap;
       state.snap = snap;
       await storageSet({ [acctStoreKey(uid)]: { last: snap, prev: state.prev }, [histStoreKey(uid)]: state.hist });
@@ -2614,6 +2716,9 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     updateSideBtns();
     const hist = r[histStoreKey(uid)];
     if (hist && Array.isArray(hist.points) && Array.isArray(hist.events)) {
+      // Older histories recorded a deactivation as "unfollowed you" plus "you unfollowed"; fold those once.
+      const fixed = reclassifyEvents(hist.events);
+      if (fixed !== hist.events) { hist.events = fixed; storageSet({ [histStoreKey(uid)]: hist }); }
       state.hist = hist;
     } else if (state.snap) {
       // First run with history: seed it from the two snapshots kept so far, so nothing is lost.
@@ -2876,6 +2981,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     const events = state.hist && Array.isArray(state.hist.events) ? state.hist.events : [];
     state.left = lostSince(events);
     state.loops = loopsFrom(events);
+    state.react = reactivations(events);
   }
   function recordUnfollow(r, silent) {
     const snap = state.snap;

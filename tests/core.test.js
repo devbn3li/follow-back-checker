@@ -316,3 +316,66 @@ test('loopsFrom finds accounts you unfollowed and then followed again', () => {
   assert.equal(loops.has('d'), false, 'an unfollow after the loop clears the flag until the next follow');
   assert.equal(core.loopsFrom(null).size, 0);
 });
+
+test('diff tells a deactivated account apart from an unfollow', () => {
+  const prev = { at: 1, me: 'me', following: rows('mutual', 'onlyfollowing'), followers: rows('mutual', 'onlyfollower') };
+  const last = { at: 2, me: 'me', following: rows('newmutual'), followers: rows('newmutual') };
+  const d = core.diff(prev, last);
+  assert.equal(names(d.gone), 'mutual', 'in both lists before, in neither now');
+  assert.equal(names(d.back), 'newmutual', 'in both lists now, in neither before');
+  assert.equal(names(d.lost), 'onlyfollower', 'a plain follower that vanished is still an unfollow');
+  assert.equal(names(d.youUnfollowed), 'onlyfollowing');
+  assert.equal(names(d.gained), '');
+  assert.equal(names(d.youFollowed), '');
+  const evs = core.eventsFrom(d, 2, new Set());
+  const by = (type) => evs.filter((e) => e.type === type).map((e) => e.u).sort().join(',');
+  assert.equal(by('deactivated'), 'mutual');
+  assert.equal(by('gained'), 'newmutual', 'unknown newcomer in both lists is a new mutual');
+  assert.equal(by('you_followed'), 'newmutual');
+  assert.equal(by('reactivated'), '');
+  const evs2 = core.eventsFrom(d, 2, new Set(['newmutual']));
+  assert.equal(evs2.filter((e) => e.type === 'reactivated').map((e) => e.u).join(), 'newmutual', 'a known-away account coming back is reactivated');
+  assert.equal(evs2.filter((e) => e.u === 'newmutual' && e.type !== 'reactivated').length, 0);
+});
+
+test('goneSet, reactivations and groupEvents follow the new event types', () => {
+  const evs = [
+    { at: 1, type: 'deactivated', u: 'a', name: '', priv: false },
+    { at: 2, type: 'deactivated', u: 'b', name: '', priv: false },
+    { at: 3, type: 'reactivated', u: 'a', name: '', priv: false },
+  ];
+  assert.deepEqual([...core.goneSet(evs)], ['b']);
+  assert.deepEqual(core.reactivations(evs).get('a'), { goneAt: 1, backAt: 3 });
+  assert.equal(core.reactivations(evs).has('b'), false);
+  const g = core.groupEvents(evs);
+  assert.equal(g[0].reactivated, 1);
+  assert.equal(g[2].deactivated, 1);
+});
+
+test('reclassifyEvents folds old lost+you_unfollowed pairs into deactivated/reactivated', () => {
+  const old = [
+    { at: 10, type: 'lost', u: 'x', name: 'X', priv: false },
+    { at: 10, type: 'you_unfollowed', u: 'x', name: 'X', priv: false },
+    { at: 10, type: 'lost', u: 'real', name: '', priv: false },
+    { at: 20, type: 'gained', u: 'x', name: 'X', priv: false },
+    { at: 20, type: 'you_followed', u: 'x', name: 'X', priv: false },
+    { at: 20, type: 'gained', u: 'fresh', name: '', priv: false },
+    { at: 20, type: 'you_followed', u: 'fresh', name: '', priv: false },
+  ];
+  const fixed = core.reclassifyEvents(old);
+  const list = fixed.map((e) => e.type + ':' + e.u + '@' + e.at).sort();
+  assert.deepEqual(list, ['deactivated:x@10', 'gained:fresh@20', 'lost:real@10', 'reactivated:x@20', 'you_followed:fresh@20']);
+  assert.equal(core.reclassifyEvents(fixed), fixed, 'idempotent: the same array comes back');
+  const untouched = [{ at: 1, type: 'lost', u: 'q', name: '', priv: false }];
+  assert.equal(core.reclassifyEvents(untouched), untouched);
+});
+
+test('goneSet, reactivations and reclassifyEvents survive damaged entries', () => {
+  const junk = [null, { type: 'deactivated' }, { at: 'x', type: 'deactivated', u: 'a', name: '', priv: false }];
+  const good = { at: 5, type: 'deactivated', u: 'b', name: '', priv: false };
+  assert.deepEqual([...core.goneSet(junk.concat([good]))], ['b']);
+  assert.equal(core.goneSet(null).size, 0);
+  assert.equal(core.reactivations(junk).size, 0);
+  assert.deepEqual(core.reclassifyEvents(junk.concat([good])), [good], 'damaged entries are dropped, which counts as a change');
+  assert.equal(core.reclassifyEvents([good])[0], good, 'a clean history comes back as is');
+});

@@ -40,12 +40,19 @@
     if (prev.me && last.me && prev.me.toLowerCase() !== last.me.toLowerCase()) return null;
     const names = (rows) => new Set(rows.map((r) => r.u));
     const pf = names(prev.followers), lf = names(last.followers), pg = names(prev.following), lg = names(last.following);
+    // An account that was in both of your lists and is now in neither did not unfollow you while you
+    // unfollowed it in the same breath: it deactivated (or was removed). The mirror image is one that
+    // shows up in both lists at once, which is a deactivated account coming back or a brand-new mutual.
+    const goneNames = new Set(prev.following.filter((r) => pf.has(r.u) && !lg.has(r.u) && !lf.has(r.u)).map((r) => r.u));
+    const backNames = new Set(last.following.filter((r) => lf.has(r.u) && !pg.has(r.u) && !pf.has(r.u)).map((r) => r.u));
     return {
       since: prev.at,
-      gained: last.followers.filter((r) => !pf.has(r.u)),
-      lost: prev.followers.filter((r) => !lf.has(r.u)),
-      youFollowed: last.following.filter((r) => !pg.has(r.u)),
-      youUnfollowed: prev.following.filter((r) => !lg.has(r.u)),
+      gained: last.followers.filter((r) => !pf.has(r.u) && !backNames.has(r.u)),
+      lost: prev.followers.filter((r) => !lf.has(r.u) && !goneNames.has(r.u)),
+      youFollowed: last.following.filter((r) => !pg.has(r.u) && !backNames.has(r.u)),
+      youUnfollowed: prev.following.filter((r) => !lg.has(r.u) && !goneNames.has(r.u)),
+      gone: prev.following.filter((r) => goneNames.has(r.u)),
+      back: last.following.filter((r) => backNames.has(r.u)),
     };
   }
 
@@ -58,10 +65,80 @@
     for (const r of snap.following) if (followers.has(r.u)) mutual++;
     return { at: snap.at, following: snap.following.length, followers: snap.followers.length, mutual, notback: snap.following.length - mutual };
   }
-  function eventsFrom(d, at) {
+  // priorGone: usernames whose account is currently recorded as deactivated (see goneSet). An account
+  // that comes back to both lists is 'reactivated' when we saw it go; otherwise it is a new mutual follow.
+  function eventsFrom(d, at, priorGone) {
     if (!d) return [];
-    const mk = (type, rows) => rows.map((r) => ({ at, type, u: r.u, name: r.name || '', priv: !!r.priv }));
-    return [...mk('gained', d.gained), ...mk('lost', d.lost), ...mk('you_followed', d.youFollowed), ...mk('you_unfollowed', d.youUnfollowed)];
+    const gone = priorGone || new Set();
+    const mk = (type, rows) => (rows || []).map((r) => ({ at, type, u: r.u, name: r.name || '', priv: !!r.priv }));
+    const back = d.back || [];
+    const returned = back.filter((r) => gone.has(r.u));
+    const fresh = back.filter((r) => !gone.has(r.u));
+    return [
+      ...mk('gained', d.gained), ...mk('lost', d.lost),
+      ...mk('you_followed', d.youFollowed), ...mk('you_unfollowed', d.youUnfollowed),
+      ...mk('deactivated', d.gone), ...mk('reactivated', returned),
+      ...mk('gained', fresh), ...mk('you_followed', fresh),
+    ];
+  }
+  // Well-formed events, oldest first. Stored histories are trusted, but a damaged entry must not break a load.
+  function validEvents(events) {
+    return (Array.isArray(events) ? events : []).filter((e) => e && typeof e.u === 'string' && typeof e.at === 'number').sort((a, b) => a.at - b.at);
+  }
+  // Usernames whose latest deactivated/reactivated event says they are away right now.
+  function goneSet(events) {
+    const state = new Map();
+    for (const e of validEvents(events)) {
+      if (e.type === 'deactivated') state.set(e.u, true);
+      else if (e.type === 'reactivated' || e.type === 'gained' || e.type === 'you_followed') state.set(e.u, false);
+    }
+    return new Set([...state.entries()].filter(([, away]) => away).map(([u]) => u));
+  }
+  // Accounts that deactivated and came back: username -> { goneAt, backAt } of the latest such pair.
+  function reactivations(events) {
+    const away = new Map(), out = new Map();
+    for (const e of validEvents(events)) {
+      if (e.type === 'deactivated') { away.set(e.u, e.at); out.delete(e.u); }
+      else if (e.type === 'reactivated' && away.has(e.u)) { out.set(e.u, { goneAt: away.get(e.u), backAt: e.at }); away.delete(e.u); }
+    }
+    return out;
+  }
+  // Histories recorded before deactivations were understood hold a 'lost' and a 'you_unfollowed' for
+  // the same account at the same check (and later a 'gained' plus 'you_followed'). Fold those pairs
+  // into 'deactivated' / 'reactivated'. Idempotent; returns the same array when nothing changes.
+  function reclassifyEvents(events) {
+    const list = validEvents(events); // a damaged entry is dropped, which counts as a change
+    const key = (e) => e.at + '\u0000' + e.u;
+    const types = new Map();
+    for (const e of list) {
+      const k = key(e);
+      if (!types.has(k)) types.set(k, new Set());
+      types.get(k).add(e.type);
+    }
+    const isGone = (e) => { const s = types.get(key(e)); return s && s.has('lost') && s.has('you_unfollowed'); };
+    const isBack = (e) => { const s = types.get(key(e)); return s && s.has('gained') && s.has('you_followed'); };
+    let changed = list.length !== (Array.isArray(events) ? events.length : 0);
+    const out = [];
+    const away = new Set();
+    const folded = new Set(); // at+user pairs already turned into a reactivation, so the twin is dropped too
+    for (const e of list) {
+      if (e.type === 'deactivated') { away.add(e.u); out.push(e); continue; }
+      if (e.type === 'reactivated') { away.delete(e.u); out.push(e); continue; }
+      if ((e.type === 'lost' || e.type === 'you_unfollowed') && isGone(e)) {
+        changed = true;
+        if (e.type === 'lost') { out.push(Object.assign({}, e, { type: 'deactivated' })); away.add(e.u); }
+        continue; // the you_unfollowed twin is dropped
+      }
+      if ((e.type === 'gained' || e.type === 'you_followed') && isBack(e) && (away.has(e.u) || folded.has(key(e)))) {
+        changed = true;
+        folded.add(key(e));
+        if (e.type === 'gained') { out.push(Object.assign({}, e, { type: 'reactivated' })); away.delete(e.u); }
+        continue; // the you_followed twin is dropped
+      }
+      if (e.type === 'gained' || e.type === 'you_followed') away.delete(e.u);
+      out.push(e);
+    }
+    return changed ? out : events;
   }
   function appendHistory(hist, point, events, caps) {
     const base = hist && Array.isArray(hist.points) && Array.isArray(hist.events) ? hist : { points: [], events: [] };
@@ -78,6 +155,8 @@
       lost: list.filter((e) => e.type === 'lost').length,
       youFollowed: list.filter((e) => e.type === 'you_followed').length,
       youUnfollowed: list.filter((e) => e.type === 'you_unfollowed').length,
+      deactivated: list.filter((e) => e.type === 'deactivated').length,
+      reactivated: list.filter((e) => e.type === 'reactivated').length,
     }));
   }
 
@@ -369,5 +448,5 @@
     return out;
   }
 
-  return { loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
+  return { loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
 });
