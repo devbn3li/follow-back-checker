@@ -231,6 +231,18 @@
     leftBackChip: 'unfollowed you {d}, back now',
     nLeftBefore: '{n} unfollowed you before',
     pillLeft: 'unfollowed you {d}',
+    loadCounts: 'Load counts',
+    loadCountsTitle: 'Fetches followers and following of each account shown, one request per account, paced. Up to {n} per tap; tap again to stop.',
+    loadingCounts: 'Counts {a}/{b}, tap to stop',
+    countsDone: 'Counts loaded for {n}',
+    countsStopped: 'Stopped after {n}',
+    countsNothing: 'Every account shown already has counts.',
+    countsTitle: '{fw} followers · {fg} following',
+    oddsLow: 'unlikely to follow back',
+    oddsGood: 'likely to follow back',
+    sortName: 'Sort: username',
+    sortFollowers: 'Sort: most followers',
+    sortRatio: 'Sort: least likely to follow back',
   };
 
   const ar = {
@@ -457,6 +469,18 @@
     leftBackChip: 'سابك {d} ورجع',
     nLeftBefore: '{n} سابوك قبل كده',
     pillLeft: 'سابك {d}',
+    loadCounts: 'هات الأرقام',
+    loadCountsTitle: 'بيجيب عدد المتابعين والمتابَعين لكل حساب ظاهر، طلب لكل حساب، متباعد. لحد {n} في الضغطة، ودوس تاني علشان توقف.',
+    loadingCounts: 'الأرقام {a}/{b}، دوس علشان توقف',
+    countsDone: 'الأرقام جت لـ {n}',
+    countsStopped: 'وقف بعد {n}',
+    countsNothing: 'كل الحسابات الظاهرة أرقامها موجودة.',
+    countsTitle: '{fw} متابع · بيتابع {fg}',
+    oddsLow: 'صعب يرد المتابعة',
+    oddsGood: 'غالباً هيرد المتابعة',
+    sortName: 'ترتيب: الاسم',
+    sortFollowers: 'ترتيب: الأكتر متابعين',
+    sortRatio: 'ترتيب: الأصعب يردوا',
   };
 
   return { en, ar };

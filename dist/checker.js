@@ -1,4 +1,4 @@
-/* Follow Back Checker 1.8.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+/* Follow Back Checker 1.9.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
 // Panel styles. Injected into a shadow root by content.js, so Instagram's own CSS cannot leak in
 // and a strict page CSP cannot block them (they go in through a constructed stylesheet).
 var FBC_CSS = `
@@ -144,6 +144,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .unf.undo:hover { background: var(--accent-soft); border-color: var(--accent); }
 .unf.undo.arm { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .chip.muted { opacity: 0.7; }
+.chip.cnt { font-variant-numeric: tabular-nums; direction: ltr; unicode-bidi: isolate; }
 .modal { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); display: grid; place-items: center; z-index: 5; padding: 16px; }
 .modal .box { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 12px; padding: 16px; max-width: 380px; display: grid; gap: 10px; box-shadow: 0 12px 40px var(--shadow); }
 .mtitle { font-weight: 700; font-size: 15px; }
@@ -527,7 +528,45 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     return { pending: [...map.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)), added };
   }
 
-  return { carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
+  // Counts of another account: a short number for a chip, the follow-back odds, a sort and the cache.
+  function shortNum(n) {
+    n = Number(n || 0);
+    if (n >= 1e6) return Math.round(n / 1e5) / 10 + 'M';
+    if (n >= 1e4) return Math.round(n / 1e3) + 'K';
+    if (n >= 1e3) return Math.round(n / 100) / 10 + 'K';
+    return String(n);
+  }
+  // 'low': follows nobody, or a big account following ten times fewer than follow it. 'good': close to even.
+  function followBackOdds(c) {
+    if (!c || typeof c.fw !== 'number' || typeof c.fg !== 'number') return '';
+    if (c.fg === 0) return 'low';
+    const ratio = c.fw / c.fg;
+    if (c.fw >= 1000 && ratio >= 10) return 'low';
+    if (ratio <= 1.5) return 'good';
+    return 'mid';
+  }
+  function sortRows(rows, mode, counts) {
+    const byName = (a, b) => (a.u < b.u ? -1 : a.u > b.u ? 1 : 0);
+    const c = (r) => (counts && counts[r.u]) || null;
+    const key = mode === 'followers' ? (r) => (c(r) ? c(r).fw : -1)
+      : mode === 'ratio' ? (r) => (c(r) ? (c(r).fg === 0 ? Infinity : c(r).fw / c(r).fg) : -1)
+      : null;
+    const out = rows.slice();
+    if (!key) return out.sort(byName);
+    return out.sort((a, b) => (key(b) - key(a)) || byName(a, b));
+  }
+  // Drops stale entries and keeps the newest cap.
+  function pruneCounts(counts, now, cap, ttl) {
+    const entries = Object.entries(counts && typeof counts === 'object' ? counts : {})
+      .filter(([u, v]) => v && typeof v.fw === 'number' && typeof v.fg === 'number' && typeof v.at === 'number' && now - v.at < ttl)
+      .sort((a, b) => b[1].at - a[1].at)
+      .slice(0, cap);
+    const out = {};
+    for (const [u, v] of entries) out[u] = v;
+    return out;
+  }
+
+  return { carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
 });
 
 ;
@@ -764,6 +803,18 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     leftBackChip: 'unfollowed you {d}, back now',
     nLeftBefore: '{n} unfollowed you before',
     pillLeft: 'unfollowed you {d}',
+    loadCounts: 'Load counts',
+    loadCountsTitle: 'Fetches followers and following of each account shown, one request per account, paced. Up to {n} per tap; tap again to stop.',
+    loadingCounts: 'Counts {a}/{b}, tap to stop',
+    countsDone: 'Counts loaded for {n}',
+    countsStopped: 'Stopped after {n}',
+    countsNothing: 'Every account shown already has counts.',
+    countsTitle: '{fw} followers · {fg} following',
+    oddsLow: 'unlikely to follow back',
+    oddsGood: 'likely to follow back',
+    sortName: 'Sort: username',
+    sortFollowers: 'Sort: most followers',
+    sortRatio: 'Sort: least likely to follow back',
   };
 
   const ar = {
@@ -990,6 +1041,18 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     leftBackChip: 'سابك {d} ورجع',
     nLeftBefore: '{n} سابوك قبل كده',
     pillLeft: 'سابك {d}',
+    loadCounts: 'هات الأرقام',
+    loadCountsTitle: 'بيجيب عدد المتابعين والمتابَعين لكل حساب ظاهر، طلب لكل حساب، متباعد. لحد {n} في الضغطة، ودوس تاني علشان توقف.',
+    loadingCounts: 'الأرقام {a}/{b}، دوس علشان توقف',
+    countsDone: 'الأرقام جت لـ {n}',
+    countsStopped: 'وقف بعد {n}',
+    countsNothing: 'كل الحسابات الظاهرة أرقامها موجودة.',
+    countsTitle: '{fw} متابع · بيتابع {fg}',
+    oddsLow: 'صعب يرد المتابعة',
+    oddsGood: 'غالباً هيرد المتابعة',
+    sortName: 'ترتيب: الاسم',
+    sortFollowers: 'ترتيب: الأكتر متابعين',
+    sortRatio: 'ترتيب: الأصعب يردوا',
   };
 
   return { en, ar };
@@ -1013,7 +1076,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -1141,6 +1204,9 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const logStoreKey = (uid) => 'fbc.log.' + uid;
   const pendStoreKey = (uid) => 'fbc.pending.' + uid;
   const LOG_CAP = 500;
+  // Counts of other accounts, shared by every logged-in account: username -> { fw, fg, at }.
+  const COUNTS_KEY = 'fbc.counts';
+  const COUNTS = { max: 60, cap: 3000, ttlMs: 14 * 86400000 };
   const HIST_CAPS = { points: 400, events: 3000 };
 
   // --- Instagram requests
@@ -1295,7 +1361,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     changes: { label: 'tileHistory', title: 'titleHistory', empty: '' },
   };
   const freshActions = () => ({ times: [], pausedUntil: 0, warned: false });
-  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], left: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0 };
+  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0 };
   const live = { following: 0, followers: 0 };
   const ui = {};
   // Small preferences, remembered across visits: language, panel width, and the pause after Instagram asks us to slow down.
@@ -1380,6 +1446,9 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.share = h('button', { class: 'btn small', type: 'button', onclick: () => openShareCard() });
     ui.kindOpts = ['all', 'verified', 'notVerified', 'private', 'public'].map((v) => h('option', { value: v }));
     ui.kindFilter = h('select', { class: 'field sel', onchange: () => { state.kind = ui.kindFilter.value; renderList(); } }, ui.kindOpts);
+    ui.sortOpts = ['name', 'followers', 'ratio'].map((v) => h('option', { value: v }));
+    ui.sortSel = h('select', { class: 'field sel', onchange: () => { state.sort = ui.sortSel.value; renderList(); } }, ui.sortOpts);
+    ui.countsBtn = h('button', { class: 'btn small', type: 'button', onclick: () => loadCounts() });
     ui.filterOpts = ['all', 'others', 'gained', 'lost', 'you_followed', 'you_unfollowed'].map((v) => h('option', { value: v }));
     ui.evFilter = h('select', { class: 'field sel', hidden: true, onchange: () => { state.evFilter = ui.evFilter.value; renderList(); } }, ui.filterOpts);
     ui.copy = h('button', { class: 'btn small', type: 'button', onclick: () => copyList() });
@@ -1387,7 +1456,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.protectedBtn = h('button', { class: 'btn small', type: 'button', onclick: () => { state.tab = 'protected'; renderList(); } });
     ui.pendingBtn = h('button', { class: 'btn small', type: 'button', onclick: () => { state.tab = 'pending'; renderList(); } });
     ui.logBtn = h('button', { class: 'btn small', type: 'button', onclick: () => { state.tab = 'actions'; renderList(); } });
-    ui.toolbar = h('div', { class: 'toolbar' }, ui.search, ui.hideDoneWrap, ui.showProtectedWrap, ui.onlyLeftWrap, ui.kindFilter, ui.evFilter, ui.copy, ui.download, ui.protectedBtn, ui.pendingBtn, ui.logBtn, ui.share);
+    ui.toolbar = h('div', { class: 'toolbar' }, ui.search, ui.hideDoneWrap, ui.showProtectedWrap, ui.onlyLeftWrap, ui.kindFilter, ui.sortSel, ui.countsBtn, ui.evFilter, ui.copy, ui.download, ui.protectedBtn, ui.pendingBtn, ui.logBtn, ui.share);
     ui.listTitle = h('div', { class: 'listtitle' });
     ui.chart = h('div', { class: 'charthost', hidden: true });
     // Protected accounts: paste, import, export, and the list itself.
@@ -1475,6 +1544,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.lbShowNameText.textContent = t('showName');
     const kindKeys = ['kindAll', 'kindVerified', 'kindNotVerified', 'kindPrivate', 'kindPublic'];
     ui.kindOpts.forEach((o, i) => { o.textContent = t(kindKeys[i]); });
+    const sortKeys = ['sortName', 'sortFollowers', 'sortRatio'];
+    ui.sortOpts.forEach((o, i) => { o.textContent = t(sortKeys[i]); });
+    ui.countsBtn.title = t('loadCountsTitle', { n: COUNTS.max });
+    if (!state.countsRun) ui.countsBtn.textContent = t('loadCounts');
     ui.download.textContent = t('download');
     ui.protAdd.textContent = t('add');
     ui.protImport.textContent = t('importBtn');
@@ -2053,6 +2126,12 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       r.name ? h('div', { class: 'name', title: r.name }, r.name) : null));
     if (r.ver) row.append(h('span', { class: 'tag ver' }, t('verifiedTag')));
     if (r.priv) row.append(h('span', { class: 'tag' }, t('privateTag')));
+    const cnt = state.tab !== 'changes' ? state.counts[r.u] : null;
+    if (cnt) {
+      const odds = followBackOdds(cnt);
+      const title = t('countsTitle', { fw: num(cnt.fw), fg: num(cnt.fg) }) + (odds === 'low' ? ' · ' + t('oddsLow') : odds === 'good' ? ' · ' + t('oddsGood') : '');
+      row.append(h('span', { class: 'chip cnt' + (odds === 'low' ? ' warn' : odds === 'good' ? ' good' : ''), title }, shortNum(cnt.fw) + ' · ' + shortNum(cnt.fg)));
+    }
     if (state.tab !== 'changes' && state.left.has(r.u)) {
       const stillFollowsYou = !!(state.snap && state.snap.followers.some((x) => x.u === r.u));
       row.append(h('span', { class: 'chip warn' }, t(stillFollowsYou ? 'leftBackChip' : 'leftChip', { d: fmtMD(state.left.get(r.u)) })));
@@ -2136,7 +2215,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     if ((state.tab === 'notback' || state.tab === 'fans') && state.onlyLeft) rows = rows.filter((r) => state.left.has(r.u));
     if (state.hideDone) rows = rows.filter((r) => !isDone(r.u));
     if (state.kind !== 'all') rows = rows.filter((r) => matchesKind(r, state.kind));
-    return rows.slice().sort((a, b) => (a.u < b.u ? -1 : a.u > b.u ? 1 : 0));
+    return sortRows(rows, state.sort, state.counts);
   }
   function renderProtected() {
     ui.listTitle.textContent = t('protectedTitle');
@@ -2207,6 +2286,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.evFilter.hidden = !history;
     ui.hideDoneWrap.hidden = history || side;
     ui.kindFilter.hidden = history || side;
+    ui.sortSel.hidden = history || side;
+    ui.countsBtn.hidden = history || side;
     ui.showProtectedWrap.hidden = state.tab !== 'notback';
     const leftRows = state.tab === 'fans' ? state.lists.fans.filter((r) => state.left.has(r.u)) : whoLeft(state.lists.notback.filter((r) => !isProtected(r.u)), state.left);
     ui.onlyLeftWrap.hidden = (state.tab !== 'notback' && state.tab !== 'fans') || !leftRows.length;
@@ -2473,7 +2554,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     updateSideBtns();
     applySnapshot();
     if (!uid) return;
-    const r = await storageGet([acctStoreKey(uid), doneStoreKey(uid), histStoreKey(uid), whiteStoreKey(uid), actStoreKey(uid), logStoreKey(uid), pendStoreKey(uid), 'fbc', 'fbcDone']);
+    const r = await storageGet([acctStoreKey(uid), doneStoreKey(uid), histStoreKey(uid), whiteStoreKey(uid), actStoreKey(uid), logStoreKey(uid), pendStoreKey(uid), COUNTS_KEY, 'fbc', 'fbcDone']);
     if (seq !== loadSeq) return; // another account took over while loading
     let acct = r[acctStoreKey(uid)];
     let done = r[doneStoreKey(uid)];
@@ -2490,6 +2571,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     updateProtectedBtn();
     const act = r[actStoreKey(uid)];
     state.actions = act && typeof act === 'object' && Array.isArray(act.times) ? { times: act.times, pausedUntil: Number(act.pausedUntil) || 0, warned: !!act.warned } : freshActions();
+    state.counts = pruneCounts(r[COUNTS_KEY], Date.now(), COUNTS.cap, COUNTS.ttlMs);
     const rawLog = r[logStoreKey(uid)];
     state.log = Array.isArray(rawLog) ? rawLog.filter((e) => e && typeof e.at === 'number' && typeof e.u === 'string').slice(-LOG_CAP) : [];
     state.pending = mergePending([], Array.isArray(r[pendStoreKey(uid)]) ? r[pendStoreKey(uid)] : [], Date.now()).pending;
@@ -2873,6 +2955,50 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       btn.disabled = false;
       btn.textContent = t('unfollow');
     }
+  }
+  // Followers and following of the accounts shown, one paced request each, at most COUNTS.max per tap.
+  async function loadCounts() {
+    if (state.countsRun) { state.countsRun.cancelled = true; return; }
+    if (!state.lists || state.running) { if (state.running) toast(t('unfollowBusy')); return; }
+    if (Date.now() < state.cooldownUntil) { toast(t('pillPaused', { t: fmtT(state.cooldownUntil) })); return; }
+    const fresh = (u) => state.counts[u] && Date.now() - state.counts[u].at < COUNTS.ttlMs;
+    const todo = listRows().filter((r) => r.id && !fresh(r.u)).slice(0, COUNTS.max);
+    if (!todo.length) { toast(t('countsNothing')); return; }
+    const ctl = { cancelled: false };
+    state.countsRun = ctl;
+    let done = 0;
+    const label = () => { ui.countsBtn.textContent = t('loadingCounts', { a: num(done), b: num(todo.length) }); };
+    label();
+    try {
+      for (const r of todo) {
+        if (ctl.cancelled) break;
+        const j = await igGet(API.info(encodeURIComponent(r.id)));
+        const u = j && j.user;
+        if (u && typeof u.follower_count === 'number' && typeof u.following_count === 'number') {
+          state.counts[r.u] = { fw: u.follower_count, fg: u.following_count, at: Date.now() };
+        }
+        done++;
+        label();
+        if (done % 10 === 0) { saveCounts(); renderList(); }
+        if (done < todo.length && !ctl.cancelled) await sleep(PACE.minDelayMs + Math.random() * PACE.jitterMs, ctl);
+      }
+      toast(t(ctl.cancelled || done < todo.length ? 'countsStopped' : 'countsDone', { n: num(done) }));
+    } catch (e) {
+      if (e instanceof Cancelled) toast(t('countsStopped', { n: num(done) }));
+      else {
+        if (e instanceof RateLimited) { state.cooldownUntil = Date.now() + REL_COOLDOWN_MS; saveUi(); }
+        toast(t('liveFailed', { r: e && e.message ? e.message : String(e) }));
+      }
+    } finally {
+      state.countsRun = null;
+      saveCounts();
+      ui.countsBtn.textContent = t('loadCounts');
+      renderList();
+    }
+  }
+  function saveCounts() {
+    state.counts = pruneCounts(state.counts, Date.now(), COUNTS.cap, COUNTS.ttlMs);
+    storageSet({ [COUNTS_KEY]: state.counts });
   }
   // Withdraws one follow request; the same route the site uses, confirmed with friendships/show.
   async function cancelRequest(r) {

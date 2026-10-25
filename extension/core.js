@@ -320,5 +320,43 @@
     return { pending: [...map.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)), added };
   }
 
-  return { carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
+  // Counts of another account: a short number for a chip, the follow-back odds, a sort and the cache.
+  function shortNum(n) {
+    n = Number(n || 0);
+    if (n >= 1e6) return Math.round(n / 1e5) / 10 + 'M';
+    if (n >= 1e4) return Math.round(n / 1e3) + 'K';
+    if (n >= 1e3) return Math.round(n / 100) / 10 + 'K';
+    return String(n);
+  }
+  // 'low': follows nobody, or a big account following ten times fewer than follow it. 'good': close to even.
+  function followBackOdds(c) {
+    if (!c || typeof c.fw !== 'number' || typeof c.fg !== 'number') return '';
+    if (c.fg === 0) return 'low';
+    const ratio = c.fw / c.fg;
+    if (c.fw >= 1000 && ratio >= 10) return 'low';
+    if (ratio <= 1.5) return 'good';
+    return 'mid';
+  }
+  function sortRows(rows, mode, counts) {
+    const byName = (a, b) => (a.u < b.u ? -1 : a.u > b.u ? 1 : 0);
+    const c = (r) => (counts && counts[r.u]) || null;
+    const key = mode === 'followers' ? (r) => (c(r) ? c(r).fw : -1)
+      : mode === 'ratio' ? (r) => (c(r) ? (c(r).fg === 0 ? Infinity : c(r).fw / c(r).fg) : -1)
+      : null;
+    const out = rows.slice();
+    if (!key) return out.sort(byName);
+    return out.sort((a, b) => (key(b) - key(a)) || byName(a, b));
+  }
+  // Drops stale entries and keeps the newest cap.
+  function pruneCounts(counts, now, cap, ttl) {
+    const entries = Object.entries(counts && typeof counts === 'object' ? counts : {})
+      .filter(([u, v]) => v && typeof v.fw === 'number' && typeof v.fg === 'number' && typeof v.at === 'number' && now - v.at < ttl)
+      .sort((a, b) => b[1].at - a[1].at)
+      .slice(0, cap);
+    const out = {};
+    for (const [u, v] of entries) out[u] = v;
+    return out;
+  }
+
+  return { carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
 });

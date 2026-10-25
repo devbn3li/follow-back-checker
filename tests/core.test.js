@@ -280,3 +280,23 @@ test('mergePending keeps one row per account with the earliest date and any know
   assert.deepEqual(second.pending[0], { u: 'a', id: '9', name: 'A', pic: '', priv: true, ts: 1000 });
   assert.equal(second.pending.length, 2);
 });
+
+test('shortNum, followBackOdds, sortRows and pruneCounts', () => {
+  assert.deepEqual([0, 950, 3492, 12345, 2500000].map(core.shortNum), ['0', '950', '3.5K', '12K', '2.5M']);
+  assert.equal(core.followBackOdds({ fw: 3492, fg: 95 }), 'low', 'big account following few');
+  assert.equal(core.followBackOdds({ fw: 50, fg: 0 }), 'low', 'follows nobody');
+  assert.equal(core.followBackOdds({ fw: 120, fg: 110 }), 'good');
+  assert.equal(core.followBackOdds({ fw: 400, fg: 100 }), 'mid', 'small account, ratio alone is not enough');
+  assert.equal(core.followBackOdds(null), '');
+  assert.equal(core.followBackOdds({ fw: 1 }), '');
+  const rows = [{ u: 'b' }, { u: 'a' }, { u: 'c' }, { u: 'd' }];
+  const counts = { a: { fw: 3492, fg: 95 }, b: { fw: 500, fg: 500 }, c: { fw: 10, fg: 0 } };
+  assert.deepEqual(core.sortRows(rows, 'name', counts).map((r) => r.u), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(core.sortRows(rows, 'followers', counts).map((r) => r.u), ['a', 'b', 'c', 'd'], 'most followers first, unknown last');
+  assert.deepEqual(core.sortRows(rows, 'ratio', counts).map((r) => r.u), ['c', 'a', 'b', 'd'], 'following nobody counts as the worst odds');
+  assert.deepEqual(core.sortRows(rows, 'ratio', null).map((r) => r.u), ['a', 'b', 'c', 'd'], 'no counts: by name');
+  const day = 86400000, now = 100 * day;
+  const pruned = core.pruneCounts({ old: { fw: 1, fg: 1, at: now - 20 * day }, x: { fw: 1, fg: 1, at: now - 1 * day }, y: { fw: 2, fg: 2, at: now - 2 * day }, bad: { fw: 'no' }, z: { fw: 3, fg: 3, at: now - 3 * day } }, now, 2, 14 * day);
+  assert.deepEqual(Object.keys(pruned), ['x', 'y'], 'stale and junk dropped, newest kept up to the cap');
+  assert.deepEqual(core.pruneCounts(null, now, 5, day), {});
+});

@@ -143,6 +143,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .unf.undo:hover { background: var(--accent-soft); border-color: var(--accent); }
 .unf.undo.arm { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .chip.muted { opacity: 0.7; }
+.chip.cnt { font-variant-numeric: tabular-nums; direction: ltr; unicode-bidi: isolate; }
 .modal { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); display: grid; place-items: center; z-index: 5; padding: 16px; }
 .modal .box { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 12px; padding: 16px; max-width: 380px; display: grid; gap: 10px; box-shadow: 0 12px 40px var(--shadow); }
 .mtitle { font-weight: 700; font-size: 15px; }
