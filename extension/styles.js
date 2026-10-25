@@ -119,6 +119,11 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .chip { flex: none; font-size: 11px; border-radius: 999px; padding: 2px 8px; white-space: nowrap; border: 1px solid var(--border); color: var(--muted); }
 .chip.good { color: var(--good); border-color: var(--good); }
 .chip.warn { color: var(--warn); border-color: var(--warn); }
+.chip.live { color: var(--fg); border-color: var(--accent); }
+.verify { flex: none; background: none; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted); padding: 2px 7px; cursor: pointer; white-space: nowrap; }
+.verify:hover { border-color: var(--accent); color: var(--fg); }
+.verify:disabled { opacity: 0.6; cursor: progress; }
+.notice { padding: 8px 12px; border-radius: 8px; background: var(--danger-soft); color: var(--danger); font-size: 12.5px; }
 .empty { padding: 22px 12px; text-align: center; color: var(--muted); border: 1px dashed var(--border); border-radius: 10px; }
 
 /* History chart: text in text tokens, series color only on the marks. */

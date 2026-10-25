@@ -1,4 +1,4 @@
-/* Follow Back Checker 1.2.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+/* Follow Back Checker 1.2.1. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
 // Panel styles. Injected into a shadow root by content.js, so Instagram's own CSS cannot leak in
 // and a strict page CSP cannot block them (they go in through a constructed stylesheet).
 var FBC_CSS = `
@@ -120,6 +120,11 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .chip { flex: none; font-size: 11px; border-radius: 999px; padding: 2px 8px; white-space: nowrap; border: 1px solid var(--border); color: var(--muted); }
 .chip.good { color: var(--good); border-color: var(--good); }
 .chip.warn { color: var(--warn); border-color: var(--warn); }
+.chip.live { color: var(--fg); border-color: var(--accent); }
+.verify { flex: none; background: none; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted); padding: 2px 7px; cursor: pointer; white-space: nowrap; }
+.verify:hover { border-color: var(--accent); color: var(--fg); }
+.verify:disabled { opacity: 0.6; cursor: progress; }
+.notice { padding: 8px 12px; border-radius: 8px; background: var(--danger-soft); color: var(--danger); font-size: 12.5px; }
 .empty { padding: 22px 12px; text-align: center; color: var(--muted); border: 1px dashed var(--border); border-radius: 10px; }
 
 /* History chart: text in text tokens, series color only on the marks. */
@@ -386,6 +391,19 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     gripTitle: 'Drag to resize. Double-click to reset.',
     privateTag: 'private',
     markHandled: 'Mark @{u} as handled',
+    verify: 'Check live',
+    verifyTitle: 'The list is from your last check. Ask Instagram about this account right now.',
+    liveChip: 'live: {a} · {b}',
+    liveFollowsYou: 'follows you',
+    liveNotFollowsYou: 'doesn’t follow you',
+    liveTheyRequested: 'asked to follow you',
+    liveYouFollow: 'you follow them',
+    liveYouNot: 'you don’t follow them',
+    liveYouRequested: 'your request is pending',
+    liveFailed: 'Could not check: {r}',
+    partialWarn: 'Instagram returned {got} of the {total} accounts {what}. Some may be missing from these lists; try Check now again later.',
+    partialFollowing: 'you follow',
+    partialFollowers: 'following you',
   };
 
   const ar = {
@@ -488,6 +506,19 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     gripTitle: 'اسحب علشان تغير العرض. دبل كليك يرجّع الافتراضي.',
     privateTag: 'خاص',
     markHandled: 'علّم @{u} كمخلص منه',
+    verify: 'تأكد دلوقتي',
+    verifyTitle: 'القائمة من آخر فحص. اسأل إنستجرام عن الحساب ده دلوقتي.',
+    liveChip: 'لحظي: {a} · {b}',
+    liveFollowsYou: 'بيتابعك',
+    liveNotFollowsYou: 'مش بيتابعك',
+    liveTheyRequested: 'طلب يتابعك',
+    liveYouFollow: 'إنت بتتابعه',
+    liveYouNot: 'إنت مش بتتابعه',
+    liveYouRequested: 'طلبك لسه معلق',
+    liveFailed: 'مقدرناش نتأكد: {r}',
+    partialWarn: 'إنستجرام رجّع {got} من {total} حساب {what}. ممكن يكون فيه حسابات ناقصة في القوائم دي، جرب الفحص تاني بعدين.',
+    partialFollowing: 'بتتابعهم',
+    partialFollowers: 'بيتابعوك',
   };
 
   return { en, ar };
@@ -522,8 +553,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     asbdId: '129477',
     pageSize: 200,
     info: (id) => `/api/v1/users/${id}/info/`,
-    following: (id, maxId) => `/api/v1/friendships/${id}/following/?count=${API.pageSize}` + (maxId ? `&max_id=${encodeURIComponent(maxId)}` : ''),
-    followers: (id, maxId) => `/api/v1/friendships/${id}/followers/?count=${API.pageSize}&search_surface=follow_list_page` + (maxId ? `&max_id=${encodeURIComponent(maxId)}` : ''),
+    following: (id, maxId, count) => `/api/v1/friendships/${id}/following/?count=${count || API.pageSize}` + (maxId ? `&max_id=${encodeURIComponent(maxId)}` : ''),
+    followers: (id, maxId, count) => `/api/v1/friendships/${id}/followers/?count=${count || API.pageSize}&search_surface=follow_list_page` + (maxId ? `&max_id=${encodeURIComponent(maxId)}` : ''),
   };
   // Pause between page requests, and the back-off when Instagram answers "wait a few minutes".
   const PACE = { minDelayMs: 1200, jitterMs: 1600, rateLimitWaitMs: 90000, rateLimitRetries: 2 };
@@ -651,13 +682,13 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     if (!res.ok) throw new Error(t('errHttp', { s: res.status, m: msg ? ': ' + msg : '' }));
     return j;
   }
-  async function fetchList(kind, userId, onProgress, ctl) {
+  async function fetchList(kind, userId, onProgress, ctl, pageSize) {
     const out = new Map();
     let maxId = '', retries = 0;
     for (;;) {
       if (ctl.cancelled) throw new Cancelled();
       let j;
-      try { j = await igGet(API[kind](userId, maxId)); }
+      try { j = await igGet(API[kind](userId, maxId, pageSize)); }
       catch (e) {
         if (e instanceof RateLimited && retries < PACE.rateLimitRetries) {
           retries++;
@@ -691,11 +722,31 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     } catch (e) {
       if (e instanceof AuthError) throw e; // totals are only for the progress bar
     }
+    // Instagram sometimes hands back fewer accounts than it says you have. When that happens the list
+    // is fetched once more in smaller pages and merged, and whatever is still missing is reported on the panel.
+    const short = (got, total) => typeof total === 'number' && got < total - Math.max(2, Math.ceil(total * 0.02));
+    const fetchComplete = async (kind, total) => {
+      const report = (n, wait) => prog({ phase: kind, n, total, wait });
+      const list = await fetchList(kind, userId, report, ctl);
+      if (short(list.size, total)) {
+        await sleep(PACE.minDelayMs + Math.random() * PACE.jitterMs, ctl);
+        const again = await fetchList(kind, userId, report, ctl, 50);
+        again.forEach((rec, u) => { if (!list.has(u)) list.set(u, rec); });
+      }
+      return list;
+    };
     await sleep(PACE.minDelayMs, ctl);
-    const following = await fetchList('following', userId, (n, wait) => prog({ phase: 'following', n, total: totals.following, wait }), ctl);
+    const following = await fetchComplete('following', totals.following);
     await sleep(PACE.minDelayMs + Math.random() * PACE.jitterMs, ctl);
-    const followers = await fetchList('followers', userId, (n, wait) => prog({ phase: 'followers', n, total: totals.followers, wait }), ctl);
-    return { at: Date.now(), uid: userId, me: totals.me, following: [...following.values()], followers: [...followers.values()] };
+    const followers = await fetchComplete('followers', totals.followers);
+    const partial = {};
+    if (short(following.size, totals.following)) partial.following = { got: following.size, total: totals.following };
+    if (short(followers.size, totals.followers)) partial.followers = { got: followers.size, total: totals.followers };
+    return {
+      at: Date.now(), uid: userId, me: totals.me, totals,
+      partial: Object.keys(partial).length ? partial : null,
+      following: [...following.values()], followers: [...followers.values()],
+    };
   }
 
   // --- UI
@@ -807,7 +858,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.chart = h('div', { class: 'charthost', hidden: true });
     ui.list = h('div', { class: 'list' });
     ui.empty = h('div', { class: 'empty', hidden: true });
-    ui.results = h('div', { class: 'results', hidden: true }, ui.ledger, ui.tiles, ui.toolbar, ui.listTitle, ui.chart, ui.list);
+    ui.notice = h('div', { class: 'notice', hidden: true });
+    ui.results = h('div', { class: 'results', hidden: true }, ui.ledger, ui.notice, ui.tiles, ui.toolbar, ui.listTitle, ui.chart, ui.list);
     ui.toast = h('div', { class: 'toast', role: 'status', hidden: true });
     ui.grip = h('div', { class: 'grip' });
     ui.foot = h('footer', { class: 'foot' });
@@ -928,6 +980,12 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.results.hidden = false;
     const nf = following.size, nw = followers.size;
     ui.ledger.textContent = t('ledger', { nf: num(nf), nfRaw: nf, nw: num(nw), nwRaw: nw });
+    const partial = snap.partial && typeof snap.partial === 'object' ? snap.partial : null;
+    const notes = [];
+    if (partial && partial.following) notes.push(t('partialWarn', { got: num(partial.following.got), total: num(partial.following.total), what: t('partialFollowing') }));
+    if (partial && partial.followers) notes.push(t('partialWarn', { got: num(partial.followers.got), total: num(partial.followers.total), what: t('partialFollowers') }));
+    ui.notice.textContent = notes.join(' ');
+    ui.notice.hidden = notes.length === 0;
     const L = state.lists;
     setTile('notback', num(L.notback.length), t('subOfFollowing', { pct: pct(L.notback.length, nf) }));
     setTile('fans', num(L.fans.length), t('subOfFollowers', { pct: pct(L.fans.length, nw) }));
@@ -965,7 +1023,38 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       h('a', { class: 'handle', href: 'https://www.instagram.com/' + encodeURIComponent(r.u) + '/', target: '_blank', rel: 'noopener noreferrer' }, '@' + r.u, h('span', { class: 'arrow' }, '↗')),
       r.name ? h('div', { class: 'name', title: r.name }, r.name) : null));
     if (r.priv) row.append(h('span', { class: 'tag' }, t('privateTag')));
+    if (withCheck) {
+      // The lists come from the last check; this asks Instagram about this one account right now.
+      const vb = h('button', { class: 'verify', type: 'button', title: t('verifyTitle') }, t('verify'));
+      vb.addEventListener('click', () => verifyRow(r, row, vb));
+      row.append(vb);
+    }
     return row;
+  }
+  async function verifyRow(r, row, btn) {
+    if (btn.disabled) return;
+    if (Date.now() < state.cooldownUntil) { toast(t('pillPaused', { t: fmtT(state.cooldownUntil) })); return; }
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = t('pillChecking');
+    const key = state.uid + ':' + r.u;
+    try {
+      const cached = relCache.get(key);
+      const rel = cached && Date.now() - cached.at < REL_TTL_MS ? cached.rel : await fetchRelationship(r.u);
+      relCache.set(key, { at: Date.now(), rel });
+      const they = rel.followsYou ? t('liveFollowsYou') : rel.theyRequested ? t('liveTheyRequested') : t('liveNotFollowsYou');
+      const you = rel.youFollow ? t('liveYouFollow') : rel.youRequested ? t('liveYouRequested') : t('liveYouNot');
+      let chip = row.querySelector('.chip.live');
+      if (!chip) { chip = h('span', { class: 'chip live' }); row.append(chip); }
+      chip.textContent = t('liveChip', { a: they, b: you });
+      chip.classList.toggle('good', !!(rel.followsYou && rel.youFollow));
+    } catch (e) {
+      if (e instanceof RateLimited) { state.cooldownUntil = Date.now() + REL_COOLDOWN_MS; saveUi(); }
+      toast(t('liveFailed', { r: e && e.message ? e.message : String(e) }));
+    } finally {
+      btn.textContent = label;
+      btn.disabled = false;
+    }
   }
   function renderList() {
     for (const el of ui.tiles.children) el.setAttribute('aria-selected', String(el.dataset.tab === state.tab));

@@ -107,6 +107,19 @@
     gripTitle: 'Drag to resize. Double-click to reset.',
     privateTag: 'private',
     markHandled: 'Mark @{u} as handled',
+    verify: 'Check live',
+    verifyTitle: 'The list is from your last check. Ask Instagram about this account right now.',
+    liveChip: 'live: {a} · {b}',
+    liveFollowsYou: 'follows you',
+    liveNotFollowsYou: 'doesn’t follow you',
+    liveTheyRequested: 'asked to follow you',
+    liveYouFollow: 'you follow them',
+    liveYouNot: 'you don’t follow them',
+    liveYouRequested: 'your request is pending',
+    liveFailed: 'Could not check: {r}',
+    partialWarn: 'Instagram returned {got} of the {total} accounts {what}. Some may be missing from these lists; try Check now again later.',
+    partialFollowing: 'you follow',
+    partialFollowers: 'following you',
   };
 
   const ar = {
@@ -209,6 +222,19 @@
     gripTitle: 'اسحب علشان تغير العرض. دبل كليك يرجّع الافتراضي.',
     privateTag: 'خاص',
     markHandled: 'علّم @{u} كمخلص منه',
+    verify: 'تأكد دلوقتي',
+    verifyTitle: 'القائمة من آخر فحص. اسأل إنستجرام عن الحساب ده دلوقتي.',
+    liveChip: 'لحظي: {a} · {b}',
+    liveFollowsYou: 'بيتابعك',
+    liveNotFollowsYou: 'مش بيتابعك',
+    liveTheyRequested: 'طلب يتابعك',
+    liveYouFollow: 'إنت بتتابعه',
+    liveYouNot: 'إنت مش بتتابعه',
+    liveYouRequested: 'طلبك لسه معلق',
+    liveFailed: 'مقدرناش نتأكد: {r}',
+    partialWarn: 'إنستجرام رجّع {got} من {total} حساب {what}. ممكن يكون فيه حسابات ناقصة في القوائم دي، جرب الفحص تاني بعدين.',
+    partialFollowing: 'بتتابعهم',
+    partialFollowers: 'بيتابعوك',
   };
 
   return { en, ar };
