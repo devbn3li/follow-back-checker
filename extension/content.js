@@ -15,7 +15,7 @@
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, carryMe } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -680,6 +680,25 @@
     ui.lbOpt.hidden = false;
     ui.lightbox.hidden = false;
     renderShareCard();
+    ensureMe().then((got) => { if (got && lb.card) renderShareCard(); });
+  }
+  // A check whose account-info request was throttled has no username. Ask once, only when the
+  // card needs it, and keep the answer with the saved check.
+  let meLookup = null;
+  function ensureMe() {
+    const snap = state.snap;
+    if (!snap || snap.me || !snap.uid) return Promise.resolve(false);
+    if (!meLookup) {
+      meLookup = igGet(API.info(snap.uid)).then(async (info) => {
+        const name = info && info.user && typeof info.user.username === 'string' ? info.user.username : '';
+        if (!name || state.snap !== snap) return false;
+        snap.me = name;
+        ui.me.textContent = '@' + name;
+        await storageSet({ [acctStoreKey(snap.uid)]: { last: snap, prev: state.prev } });
+        return true;
+      }).catch(() => false).finally(() => { meLookup = null; });
+    }
+    return meLookup;
   }
   // Saves a drawn image: through the Android app when it hosts the page, otherwise as a browser download.
   function saveCanvas(canvas, name) {
@@ -1290,6 +1309,7 @@
     try {
       const snap = await runCheck(state.ctl, showProgress);
       if (state.uid !== uid || snap.uid !== uid) throw new Cancelled(); // the account changed mid-check; never mix results
+      snap.me = carryMe(snap, state.snap); // the account-info request can be throttled; keep the name we already know
       state.hist = appendHistory(state.hist, pointFrom(snap), eventsFrom(diff(state.snap, snap), snap.at), HIST_CAPS);
       state.prev = state.snap;
       state.snap = snap;

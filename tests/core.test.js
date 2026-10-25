@@ -217,3 +217,10 @@ test('computeStats: rate, week change, best and worst check', () => {
   assert.equal(core.computeStats([], now), null);
   assert.equal(core.computeStats([{ at: 1, following: 0, followers: 0, mutual: 0, notback: 0 }], now).rate, 0);
 });
+
+test('carryMe keeps the username when the account-info request failed', () => {
+  assert.equal(core.carryMe({ uid: '1', me: 'new' }, { uid: '1', me: 'old' }), 'new');
+  assert.equal(core.carryMe({ uid: '1', me: '' }, { uid: '1', me: 'old' }), 'old');
+  assert.equal(core.carryMe({ uid: '1', me: '' }, { uid: '2', me: 'other' }), '', 'never borrow another account’s name');
+  assert.equal(core.carryMe({ uid: '1', me: '' }, null), '');
+});

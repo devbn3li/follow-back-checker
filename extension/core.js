@@ -225,5 +225,12 @@
     return { rate, week, best, worst, checks: pts.length, first: pts[0].at, last: last.at };
   }
 
-  return { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
+  // The logged-in username for a new check: its own, else the one an earlier check of the same account recorded.
+  function carryMe(snap, prev) {
+    if (snap && typeof snap.me === 'string' && snap.me) return snap.me;
+    if (snap && prev && prev.uid && prev.uid === snap.uid && typeof prev.me === 'string') return prev.me;
+    return '';
+  }
+
+  return { carryMe, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
 });
