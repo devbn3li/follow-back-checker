@@ -117,9 +117,10 @@
     liveYouNot: 'you don’t follow them',
     liveYouRequested: 'your request is pending',
     liveFailed: 'Could not check: {r}',
-    partialWarn: 'Instagram returned {got} of the {total} accounts {what}. Some may be missing from these lists; try Check now again later.',
+    partialWarn: 'Instagram says {total} accounts {what}; {got} came back. The rest may be deactivated accounts or ones Instagram skipped. Use Check live on a row to be sure.',
     partialFollowing: 'you follow',
     partialFollowers: 'following you',
+    progVerify: 'Double-checking {n} of {total}…',
   };
 
   const ar = {
@@ -232,9 +233,10 @@
     liveYouNot: 'إنت مش بتتابعه',
     liveYouRequested: 'طلبك لسه معلق',
     liveFailed: 'مقدرناش نتأكد: {r}',
-    partialWarn: 'إنستجرام رجّع {got} من {total} حساب {what}. ممكن يكون فيه حسابات ناقصة في القوائم دي، جرب الفحص تاني بعدين.',
+    partialWarn: 'إنستجرام بيقول {total} حساب {what}، ورجع {got}. الباقي ممكن يكون حسابات متوقفة أو حسابات إنستجرام عداها. استخدم "تأكد دلوقتي" عند أي اسم علشان تتأكد.',
     partialFollowing: 'بتتابعهم',
     partialFollowers: 'بيتابعوك',
+    progVerify: 'بنتأكد من {n} من {total}…',
   };
 
   return { en, ar };

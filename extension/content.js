@@ -26,11 +26,14 @@
     asbdId: '129477',
     pageSize: 200,
     info: (id) => `/api/v1/users/${id}/info/`,
-    following: (id, maxId, count) => `/api/v1/friendships/${id}/following/?count=${count || API.pageSize}` + (maxId ? `&max_id=${encodeURIComponent(maxId)}` : ''),
-    followers: (id, maxId, count) => `/api/v1/friendships/${id}/followers/?count=${count || API.pageSize}&search_surface=follow_list_page` + (maxId ? `&max_id=${encodeURIComponent(maxId)}` : ''),
+    following: (id, maxId, count, order) => `/api/v1/friendships/${id}/following/?count=${count || API.pageSize}` + (order ? `&order=${order}` : '') + (maxId ? `&max_id=${encodeURIComponent(maxId)}` : ''),
+    followers: (id, maxId, count, order) => `/api/v1/friendships/${id}/followers/?count=${count || API.pageSize}&search_surface=follow_list_page` + (order ? `&order=${order}` : '') + (maxId ? `&max_id=${encodeURIComponent(maxId)}` : ''),
+    friendship: (id) => `/api/v1/friendships/show/${id}/`,
   };
   // Pause between page requests, and the back-off when Instagram answers "wait a few minutes".
   const PACE = { minDelayMs: 1200, jitterMs: 1600, rateLimitWaitMs: 90000, rateLimitRetries: 2 };
+  // How many "follow you, not followed back" accounts are double-checked one by one after a check.
+  const VERIFY_MAX = 20;
 
   // --- language and formatting
   let lang = String(navigator.language || '').toLowerCase().startsWith('ar') ? 'ar' : 'en';
@@ -155,13 +158,16 @@
     if (!res.ok) throw new Error(t('errHttp', { s: res.status, m: msg ? ': ' + msg : '' }));
     return j;
   }
-  async function fetchList(kind, userId, onProgress, ctl, pageSize) {
+  // One full pass over a list. Returns the accounts plus how many came back twice, which is the
+  // sign that the pages shifted under us and something else may have been skipped.
+  async function fetchList(kind, userId, onProgress, ctl, opts) {
+    const o = opts || {};
     const out = new Map();
-    let maxId = '', retries = 0;
+    let maxId = '', retries = 0, dupes = 0;
     for (;;) {
       if (ctl.cancelled) throw new Cancelled();
       let j;
-      try { j = await igGet(API[kind](userId, maxId, pageSize)); }
+      try { j = await igGet(API[kind](userId, maxId, o.pageSize, o.order)); }
       catch (e) {
         if (e instanceof RateLimited && retries < PACE.rateLimitRetries) {
           retries++;
@@ -174,14 +180,15 @@
       const users = Array.isArray(j.users) ? j.users : [];
       for (const raw of users) {
         const rec = normalizeUser(raw);
-        if (rec && !out.has(rec.u)) out.set(rec.u, rec);
+        if (!rec) continue;
+        if (out.has(rec.u)) dupes++; else out.set(rec.u, rec);
       }
       onProgress(out.size, null);
       maxId = j.next_max_id != null && j.next_max_id !== '' ? String(j.next_max_id) : '';
       if (!maxId || users.length === 0) break;
       await sleep(PACE.minDelayMs + Math.random() * PACE.jitterMs, ctl);
     }
-    return out;
+    return { users: out, dupes };
   }
   async function runCheck(ctl, prog) {
     const userId = cookie('ds_user_id');
@@ -195,16 +202,25 @@
     } catch (e) {
       if (e instanceof AuthError) throw e; // totals are only for the progress bar
     }
-    // Instagram sometimes hands back fewer accounts than it says you have. When that happens the list
-    // is fetched once more in smaller pages and merged, and whatever is still missing is reported on the panel.
-    const short = (got, total) => typeof total === 'number' && got < total - Math.max(2, Math.ceil(total * 0.02));
+    // Instagram's lists are paged by offset, and their default order is not stable, so accounts can fall
+    // between two pages. Each list is read in a fixed order (newest follow first); if anything came back
+    // twice or the list is shorter than Instagram's own count, a second pass from the other end fills the gaps.
     const fetchComplete = async (kind, total) => {
       const report = (n, wait) => prog({ phase: kind, n, total, wait });
-      const list = await fetchList(kind, userId, report, ctl);
-      if (short(list.size, total)) {
+      let first;
+      try { first = await fetchList(kind, userId, report, ctl, { order: 'date_followed_latest' }); }
+      catch (e) {
+        if (e instanceof AuthError || e instanceof RateLimited || e instanceof Cancelled) throw e;
+        first = await fetchList(kind, userId, report, ctl); // the order parameter was refused; plain pass
+      }
+      const list = first.users;
+      const shortBy = typeof total === 'number' ? total - list.size : 0;
+      if (first.dupes > 0 || shortBy > 0) {
         await sleep(PACE.minDelayMs + Math.random() * PACE.jitterMs, ctl);
-        const again = await fetchList(kind, userId, report, ctl, 50);
-        again.forEach((rec, u) => { if (!list.has(u)) list.set(u, rec); });
+        let second = null;
+        try { second = await fetchList(kind, userId, report, ctl, { order: 'date_followed_earliest', pageSize: 100 }); }
+        catch (e) { if (e instanceof AuthError || e instanceof RateLimited || e instanceof Cancelled) throw e; }
+        if (second) second.users.forEach((rec, u) => { if (!list.has(u)) list.set(u, rec); });
       }
       return list;
     };
@@ -212,6 +228,26 @@
     const following = await fetchComplete('following', totals.following);
     await sleep(PACE.minDelayMs + Math.random() * PACE.jitterMs, ctl);
     const followers = await fetchComplete('followers', totals.followers);
+    // The accounts that follow you but seem unfollowed by you are few. Ask Instagram about each one
+    // directly, so an account that slipped between pages is never reported as one you don't follow.
+    const fans = [];
+    followers.forEach((rec, u) => { if (!following.has(u) && rec.id) fans.push(rec); });
+    if (fans.length > 0 && fans.length <= VERIFY_MAX) {
+      let i = 0;
+      for (const rec of fans) {
+        if (ctl.cancelled) throw new Cancelled();
+        prog({ phase: 'verify', n: ++i, total: fans.length });
+        try {
+          const st = await igGet(API.friendship(rec.id));
+          if (st && st.following === true) following.set(rec.u, rec);
+        } catch (e) {
+          if (e instanceof AuthError) throw e;
+          if (e instanceof RateLimited) break;
+        }
+        await sleep(PACE.minDelayMs + Math.random() * PACE.jitterMs, ctl);
+      }
+    }
+    const short = (got, total) => typeof total === 'number' && got < total - Math.max(2, Math.ceil(total * 0.01));
     const partial = {};
     if (short(following.size, totals.following)) partial.following = { got: following.size, total: totals.following };
     if (short(followers.size, totals.followers)) partial.followers = { got: followers.size, total: totals.followers };
@@ -424,11 +460,15 @@
     let text;
     if (p.wait != null) text = t('progSlow', { s: p.wait });
     else if (p.phase === 'info') text = t('progInfo');
+    else if (p.phase === 'verify') text = t('progVerify', { n: num(p.n), total: num(p.total) });
     else text = t('progFetch', { phase: t(p.phase === 'followers' ? 'phaseFollowers' : 'phaseFollowing'), n: num(p.n), of: p.total ? t('progOf', { total: num(p.total) }) : '' });
     ui.ptext.textContent = text;
     const frac = p.total ? Math.min(1, (p.n || 0) / p.total) : 0;
-    const base = p.phase === 'followers' ? 0.5 : 0;
-    ui.pfill.style.width = Math.round((p.phase === 'info' ? 0.02 : base + frac * 0.5) * 100) + '%';
+    let width = 0.02;
+    if (p.phase === 'following') width = frac * 0.45;
+    else if (p.phase === 'followers') width = 0.45 + frac * 0.45;
+    else if (p.phase === 'verify') width = 0.9 + frac * 0.1;
+    ui.pfill.style.width = Math.round(width * 100) + '%';
   }
   function setTile(k, value, sub, small) {
     ui.tile[k].value.textContent = value;
@@ -845,7 +885,7 @@
     return relFromFriendship(id);
   }
   async function relFromFriendship(id) {
-    const st = await igGet('/api/v1/friendships/show/' + encodeURIComponent(id) + '/');
+    const st = await igGet(API.friendship(encodeURIComponent(id)));
     if (!st || typeof st.followed_by !== 'boolean') throw new Error('friendship status unavailable');
     return { id, self: isMe(id), followsYou: !!st.followed_by, youFollow: !!st.following, youRequested: !!st.outgoing_request, theyRequested: !!st.incoming_request };
   }
