@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Follow Check</string>
+    <string name="intro_title">أهلاً</string>
+    <string name="intro_body">سجّل دخول إنستجرام عادي. بعدين دوس زرار "فحص المتابعين" اللي تحت علشان تعرف مين مش بيتابعك.</string>
+    <string name="intro_ok">تمام</string>
+</resources>

@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Follow Back Checker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one 920px column. A surface-colored header band, a two-card setup row (how to export | drop zone),
+   then results: a source banner, a one-line ledger, three or four stat tiles that double as tabs, a toolbar, the list. */
+:root {
+  --bg: #F2F4F6;
+  --surface: #FFFFFF;
+  --surface-2: #E8ECF0;
+  --fg: #151D25;
+  --muted: #5A6772;
+  --border: #D5DCE3;
+  --accent: #0E7C7B;
+  --accent-ink: #FFFFFF;
+  --accent-soft: #D9EFED;
+  --danger: #A33A2A;
+  --shadow: rgba(21, 29, 37, 0.18);
+  --font-display: "Bricolage Grotesque", "IBM Plex Sans", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E1317; --surface: #161C22; --surface-2: #1E262E; --fg: #E6EBEF; --muted: #94A0AB; --border: #2B353F;
+    --accent: #4FC4BE; --accent-ink: #06211F; --accent-soft: #143836; --danger: #E9907F; --shadow: rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0E1317; --surface: #161C22; --surface-2: #1E262E; --fg: #E6EBEF; --muted: #94A0AB; --border: #2B353F;
+  --accent: #4FC4BE; --accent-ink: #06211F; --accent-soft: #143836; --danger: #E9907F; --shadow: rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--font-body); -webkit-text-size-adjust: 100%; }
+.wrap { max-width: 920px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.top { background: var(--surface); border-bottom: 1px solid var(--border); }
+.top .wrap { padding-block: 32px 26px; display: grid; gap: 10px; }
+h1 { font: 700 clamp(28px, 4.5vw, 38px)/1.1 var(--font-display); margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.lede { margin: 0; max-width: 62ch; color: var(--muted); font-size: 16px; }
+.privacy { display: inline-flex; align-items: center; gap: 8px; margin: 2px 0 0; font-size: 13px; color: var(--muted); }
+.privacy svg { width: 14px; height: 14px; flex: none; color: var(--accent); }
+main.wrap { padding-block: 24px 40px; display: grid; gap: 28px; }
+h2 { font: 600 17px/1.3 var(--font-display); margin: 0; text-wrap: balance; }
+code { font: 13px var(--font-mono); background: var(--surface-2); color: var(--fg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+
+.setup { display: grid; grid-template-columns: 1.15fr 1fr; gap: 16px; align-items: stretch; }
+@media (max-width: 720px) { .setup { grid-template-columns: 1fr; } }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; min-width: 0; }
+.steps { display: grid; gap: 12px; align-content: start; }
+.steps ol { margin: 0; padding-left: 22px; display: grid; gap: 8px; }
+.steps li { padding-left: 2px; }
+.steps b { font-weight: 600; }
+.hint { margin: 0; font-size: 13px; color: var(--muted); }
+.hint.error { color: var(--danger); }
+
+.drop { display: grid; align-content: center; justify-items: center; text-align: center; gap: 10px; border: 2px dashed var(--border); padding: 28px 20px; cursor: pointer; transition: border-color .15s, background .15s; }
+.drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.drop.busy { cursor: progress; opacity: .7; }
+.drop .ico { width: 30px; height: 30px; color: var(--accent); }
+.drop p { margin: 0; color: var(--muted); font-size: 14px; max-width: 36ch; }
+.btn { font: 500 14px/1.2 var(--font-body); border: 1px solid var(--border); background: var(--surface); color: var(--fg); padding: 9px 14px; border-radius: 8px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.small { padding: 5px 10px; font-size: 13px; }
+.btn:focus-visible, .tile:focus-visible, .field:focus-visible, input[type="checkbox"]:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.results { display: grid; gap: 14px; }
+.banner { border-radius: 10px; padding: 10px 14px; font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; }
+.banner.sample { background: var(--surface-2); border: 1px dashed var(--border); }
+.banner.loaded { background: var(--accent-soft); }
+.banner > span { min-width: 0; overflow-wrap: anywhere; }
+.ledger { margin: 0; font-size: 15px; color: var(--muted); }
+.ledger strong { color: var(--fg); font-weight: 600; }
+
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.tiles.four { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 560px) { .tiles.four { grid-template-columns: repeat(2, 1fr); } }
+.tile { text-align: left; font-family: var(--font-body); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; display: grid; gap: 2px; align-content: start; cursor: pointer; color: var(--fg); min-width: 0; }
+.tile:hover { border-color: var(--accent); }
+.tile[aria-selected="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.tile .label { font-size: 13px; line-height: 1.3; color: var(--muted); }
+.tile[aria-selected="true"] .label { color: var(--accent); font-weight: 500; }
+.tile .value { font-size: clamp(26px, 4vw, 32px); font-weight: 600; line-height: 1.15; letter-spacing: -0.01em; }
+.tile .sub { font-size: 12px; line-height: 1.3; color: var(--muted); }
+
+.listhead { display: flex; justify-content: space-between; align-items: baseline; gap: 6px 14px; flex-wrap: wrap; margin-top: 6px; }
+.listhead span { font-size: 13px; color: var(--muted); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.toolbar .grow { flex: 1 1 200px; min-width: 0; }
+.field { font: 14px var(--font-body); color: var(--fg); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; width: 100%; }
+select.field { width: auto; }
+.chk { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); cursor: pointer; }
+input[type="checkbox"] { width: 17px; height: 17px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+
+.list { list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.row { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 12px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--border); min-width: 0; }
+.row:first-child { border-top: 0; }
+.row.done { opacity: .5; }
+.row.done .handle { text-decoration: line-through; }
+.handle { font: 500 15px/1.4 var(--font-mono); color: var(--fg); text-decoration: none; overflow-wrap: anywhere; min-width: 0; display: inline-flex; align-items: center; gap: 6px; }
+a.handle:hover { color: var(--accent); text-decoration: underline; }
+.handle svg { flex: none; color: var(--muted); }
+.when { font-size: 13px; color: var(--muted); text-align: right; white-space: nowrap; }
+@media (max-width: 520px) { .row { grid-template-columns: auto 1fr; } .when { grid-column: 2; text-align: left; white-space: normal; } }
+.empty { margin: 0; padding: 28px 16px; text-align: center; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+
+footer.wrap { padding-block: 0 44px; font-size: 13px; color: var(--muted); max-width: 920px; }
+footer p { margin: 0 0 6px; max-width: 70ch; }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; z-index: 20; box-shadow: 0 6px 20px var(--shadow); max-width: calc(100% - 32px); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+[hidden] { display: none !important; }
+img { max-width: 100%; }
+html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <h1>Follow Back Checker</h1>
+    <p class="lede">Drop the zip Instagram gives you when you download your information. See who you follow that doesn&rsquo;t follow you back, who follows you without a follow back, and who follows you both ways.</p>
+    <p class="privacy"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Runs entirely in your browser. Your files are read here and never uploaded.</p>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="setup" aria-label="Setup">
+    <div class="card steps">
+      <h2>1. Ask Instagram for your lists</h2>
+      <ol>
+        <li>In the Instagram app or on the web, open <b>Settings</b>, then <b>Accounts Center</b>.</li>
+        <li>Go to <b>Your information and permissions</b>, then <b>Download your information</b>.</li>
+        <li>Choose <b>Download or transfer information</b>, pick your Instagram profile, then <b>Some of your information</b>.</li>
+        <li>Tick <b>Followers and following</b> only, then <b>Download to device</b>.</li>
+        <li>Set <b>Date range</b> to All time and <b>Format</b> to JSON, then <b>Create files</b>.</li>
+        <li>Instagram emails you when the zip is ready. It usually takes minutes, sometimes up to two days.</li>
+      </ol>
+      <p class="hint">Menu names move around a little between app versions. Any export that contains <code>followers_1.json</code> and <code>following.json</code> works, and so does the HTML format.</p>
+    </div>
+    <div class="card drop" id="drop">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <h2>2. Drop the export here</h2>
+      <p>The <code>.zip</code> itself, or the files inside it: <code>followers_1.json</code> and <code>following.json</code>.</p>
+      <button type="button" class="btn primary" id="choose">Choose files</button>
+      <input type="file" id="file" multiple accept=".zip,.json,.html,application/zip,application/json,text/html" hidden>
+      <p class="hint" id="status" aria-live="polite"></p>
+    </div>
+  </section>
+
+  <section class="results" aria-label="Results">
+    <div class="banner sample" id="banner"></div>
+    <p class="ledger" id="ledger"></p>
+    <div class="tiles" id="tiles" role="tablist" aria-label="Lists">
+      <button type="button" class="tile" role="tab" id="tab-notback" data-tab="notback" aria-selected="true"><span class="label">Don&rsquo;t follow you back</span><span class="value" id="v-notback">0</span><span class="sub" id="s-notback"></span></button>
+      <button type="button" class="tile" role="tab" id="tab-fans" data-tab="fans" aria-selected="false"><span class="label">You don&rsquo;t follow back</span><span class="value" id="v-fans">0</span><span class="sub" id="s-fans"></span></button>
+      <button type="button" class="tile" role="tab" id="tab-mutual" data-tab="mutual" aria-selected="false"><span class="label">Follow each other</span><span class="value" id="v-mutual">0</span><span class="sub" id="s-mutual"></span></button>
+      <button type="button" class="tile" role="tab" id="tab-pending" data-tab="pending" aria-selected="false" hidden><span class="label">Pending requests</span><span class="value" id="v-pending">0</span><span class="sub" id="s-pending"></span></button>
+    </div>
+    <div class="listhead">
+      <h2 id="listTitle"></h2>
+      <span id="listMeta"></span>
+    </div>
+    <div class="toolbar">
+      <div class="grow"><label class="sr" for="q">Search usernames</label><input class="field" type="search" id="q" placeholder="Search usernames" autocomplete="off" spellcheck="false"></div>
+      <label class="sr" for="sort">Sort</label>
+      <select class="field" id="sort">
+        <option value="name">Name A to Z</option>
+        <option value="new">Newest first</option>
+        <option value="old">Oldest first</option>
+      </select>
+      <label class="chk" for="hideDone"><input type="checkbox" id="hideDone">Hide handled</label>
+      <button type="button" class="btn" id="copy">Copy usernames</button>
+    </div>
+    <ul class="list" id="list" role="tabpanel"></ul>
+    <p class="empty" id="empty" hidden></p>
+  </section>
+</main>
+
+<footer class="wrap">
+  <p>Usernames from your following list are matched against your followers list, lowercased. Dates are the timestamps Instagram records for each follow, so they are only as complete as the export.</p>
+  <p>The last export you drop stays in this browser only, so you can come back and keep ticking people off. Clear removes it. Ticks are kept per list and per username.</p>
+</footer>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script id="app">
+(() => {
+  'use strict';
+  const $ = (s) => document.querySelector(s);
+  const el = {
+    drop: $('#drop'), file: $('#file'), status: $('#status'),
+    banner: $('#banner'), ledger: $('#ledger'), tiles: $('#tiles'),
+    q: $('#q'), sort: $('#sort'), hideDone: $('#hideDone'), copy: $('#copy'),
+    listTitle: $('#listTitle'), listMeta: $('#listMeta'), list: $('#list'), empty: $('#empty'), toast: $('#toast'),
+  };
+  const DONE_KEY = 'fbc:done:v1', DATA_KEY = 'fbc:data:v1';
+  const ARROW = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M5 3h8v8M13 3 3 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  // --- pure:begin
+  const plural = (n, w) => (n === 1 ? w : w + 's');
+  const num = (v) => v.toLocaleString('en-US');
+  const pct = (a, b) => (b ? Math.round((100 * a) / b) + '%' : '0%');
+  const fmt = (ts) => new Date(ts * 1000).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  const base = (name) => String(name || '').split(/[\\/]/).pop();
+
+  function clean(v) {
+    if (typeof v !== 'string') return '';
+    const t = v.trim().replace(/^@/, '').replace(/\/+$/, '').toLowerCase();
+    return /^[a-z0-9._]{1,40}$/.test(t) ? t : '';
+  }
+  function handleFrom(href) {
+    if (typeof href !== 'string') return '';
+    const m = href.match(/instagram\.com\/(?:_u\/)?([^/?#\s]+)/i);
+    if (!m) return '';
+    let raw = m[1];
+    try { raw = decodeURIComponent(raw); } catch (e) { /* keep raw */ }
+    return clean(raw);
+  }
+  // Instagram JSON export: followers_N.json is a bare array of entries; following.json and
+  // pending_follow_requests.json wrap the same entries in an object under one key.
+  function parseJson(text, name) {
+    let j;
+    try { j = JSON.parse(text); } catch (e) {
+      throw new Error(base(name) + ' is not valid JSON. Request the export again with Format set to JSON.');
+    }
+    const entries = Array.isArray(j) ? j
+      : j && typeof j === 'object' ? Object.values(j).flatMap((v) => (Array.isArray(v) ? v : [])) : [];
+    const out = [];
+    for (const e of entries) {
+      if (!e || typeof e !== 'object') continue;
+      const s = Array.isArray(e.string_list_data) && e.string_list_data[0] ? e.string_list_data[0] : {};
+      const u = handleFrom(s.href) || clean(s.value) || clean(e.title);
+      if (!u) continue;
+      out.push({ u, ts: typeof s.timestamp === 'number' ? s.timestamp : null });
+    }
+    return out;
+  }
+  // Older exports (before 2021) had one connections.json: { followers: {user: isoDate}, following: {...} }.
+  function parseLegacy(text, name) {
+    let j;
+    try { j = JSON.parse(text); } catch (e) { throw new Error(base(name) + ' is not valid JSON.'); }
+    const out = { followers: [], following: [] };
+    for (const k of ['followers', 'following']) {
+      const o = j && j[k];
+      if (!o || typeof o !== 'object') continue;
+      for (const [u, v] of Object.entries(o)) {
+        const c = clean(u);
+        if (!c) continue;
+        const t = Date.parse(v);
+        out[k].push({ u: c, ts: isNaN(t) ? null : Math.round(t / 1000) });
+      }
+    }
+    return out;
+  }
+  function addAll(map, rows) {
+    for (const r of rows) {
+      if (!r || typeof r.u !== 'string') continue;
+      const u = clean(r.u);
+      if (u && !map.has(u)) map.set(u, { u, ts: typeof r.ts === 'number' ? r.ts : null });
+    }
+  }
+  function derive(d) {
+    const notback = [], fans = [], mutual = [], pending = [];
+    d.following.forEach((rec, u) => {
+      const f = d.followers.get(u);
+      if (f) mutual.push({ u, ts: rec.ts, ts2: f.ts }); else notback.push({ u, ts: rec.ts });
+    });
+    d.followers.forEach((rec, u) => { if (!d.following.has(u)) fans.push({ u, ts: rec.ts }); });
+    d.pending.forEach((rec, u) => pending.push({ u, ts: rec.ts }));
+    return { notback, fans, mutual, pending };
+  }
+  const KIND = [
+    ['followers', /^followers(?:_\d+)?\.(json|html?)$/i],
+    ['following', /^following\.(json|html?)$/i],
+    ['pending', /^pending_follow_requests\.(json|html?)$/i],
+    ['legacy', /^connections\.json$/i],
+  ];
+  function classify(name) {
+    const b = base(name);
+    for (const [k, re] of KIND) if (re.test(b)) return k;
+    return null;
+  }
+  // --- pure:end
+
+  function parseHtml(text) {
+    const doc = new DOMParser().parseFromString(text, 'text/html');
+    const out = [];
+    for (const a of doc.querySelectorAll('a[href*="instagram.com/"]')) {
+      const u = handleFrom(a.getAttribute('href'));
+      if (!u) continue;
+      let ts = null;
+      const p = a.parentElement, sib = p && p.nextElementSibling;
+      if (sib) { const t = Date.parse(sib.textContent.trim()); if (!isNaN(t)) ts = Math.round(t / 1000); }
+      out.push({ u, ts });
+    }
+    return out;
+  }
+  function parseList(it) {
+    return /\.html?$/i.test(it.name) ? parseHtml(it.text) : parseJson(it.text, it.name);
+  }
+
+  async function ingest(files) {
+    const found = { followers: [], following: [], pending: [], legacy: [] };
+    const names = [];
+    let skipped = 0;
+    for (const f of files) {
+      if (/\.zip$/i.test(f.name)) {
+        if (!window.JSZip) throw new Error('The zip reader did not load. Unzip the file and drop followers_1.json and following.json instead.');
+        setStatus('Reading ' + f.name + '…');
+        let zip;
+        try { zip = await window.JSZip.loadAsync(f); } catch (e) { throw new Error(f.name + ' could not be opened as a zip file.'); }
+        for (const entry of Object.values(zip.files)) {
+          if (entry.dir) continue;
+          const kind = classify(entry.name);
+          if (!kind) continue;
+          found[kind].push({ name: entry.name, text: await entry.async('string') });
+        }
+        names.push(f.name);
+      } else {
+        const kind = classify(f.name);
+        if (!kind) { skipped++; continue; }
+        found[kind].push({ name: f.name, text: await f.text() });
+        names.push(f.name);
+      }
+    }
+    const haveFollowers = found.followers.length > 0 || found.legacy.length > 0;
+    const haveFollowing = found.following.length > 0 || found.legacy.length > 0;
+    if (!haveFollowers && !haveFollowing) {
+      throw new Error('No followers or following files found. The export should contain followers_1.json and following.json (or the .html versions). Make sure you ticked “Followers and following” when requesting it.');
+    }
+    if (!haveFollowing) throw new Error('Found your followers file but no following.json. Drop the whole zip, or add following.json next to it.');
+    if (!haveFollowers) throw new Error('Found following.json but no followers file (followers_1.json). Drop the whole zip, or add it next to it.');
+
+    const data = { source: 'files', files: names, skipped, hasPendingFile: found.pending.length > 0, savedAt: null,
+      following: new Map(), followers: new Map(), pending: new Map() };
+    for (const it of found.followers) addAll(data.followers, parseList(it));
+    for (const it of found.following) addAll(data.following, parseList(it));
+    for (const it of found.pending) addAll(data.pending, parseList(it));
+    for (const it of found.legacy) { const l = parseLegacy(it.text, it.name); addAll(data.followers, l.followers); addAll(data.following, l.following); }
+    return data;
+  }
+
+  function pack(d) {
+    return { files: d.files, skipped: d.skipped, hasPendingFile: d.hasPendingFile, savedAt: d.savedAt || Date.now(),
+      following: [...d.following.values()], followers: [...d.followers.values()], pending: [...d.pending.values()] };
+  }
+  function unpack(s) {
+    if (!s || !Array.isArray(s.following) || !Array.isArray(s.followers)) return null;
+    const d = { source: 'files', files: Array.isArray(s.files) ? s.files.map(String) : [], skipped: s.skipped | 0, hasPendingFile: !!s.hasPendingFile,
+      savedAt: typeof s.savedAt === 'number' ? s.savedAt : null, following: new Map(), followers: new Map(), pending: new Map() };
+    addAll(d.following, s.following); addAll(d.followers, s.followers); addAll(d.pending, Array.isArray(s.pending) ? s.pending : []);
+    return d;
+  }
+
+  const SAMPLE = (() => {
+    const d = (y, m, day) => Math.round(Date.UTC(y, m - 1, day, 12) / 1000);
+    const following = [
+      ['demo.lens.studio', d(2024, 3, 2)], ['demo.coffee.lab', d(2024, 5, 18)], ['demo.runner.club', d(2024, 8, 9)],
+      ['demo.travel.notes', d(2025, 1, 21)], ['demo.street.frames', d(2025, 2, 14)], ['demo.plant.corner', d(2025, 4, 3)],
+      ['demo.kitchen.diary', d(2025, 6, 27)], ['demo.gym.log', d(2025, 7, 11)], ['demo.city.walks', d(2025, 9, 30)],
+      ['demo.book.stack', d(2025, 11, 5)], ['demo.ui.sketches', d(2026, 2, 16)], ['demo.night.sky', d(2026, 6, 8)],
+    ];
+    const followers = [
+      ['demo.lens.studio', d(2024, 3, 4)], ['demo.coffee.lab', d(2024, 5, 18)], ['demo.runner.club', d(2024, 9, 1)],
+      ['demo.gym.log', d(2025, 7, 12)], ['demo.book.stack', d(2025, 11, 6)], ['demo.night.sky', d(2026, 6, 8)],
+      ['demo.old.classmate', d(2024, 12, 24)], ['demo.vintage.cams', d(2025, 3, 19)], ['demo.weekend.hikes', d(2025, 10, 2)], ['demo.art.prints', d(2026, 8, 20)],
+    ];
+    const pending = [['demo.private.garden', d(2026, 9, 12)], ['demo.film.archive', d(2026, 10, 3)]];
+    const toMap = (rows) => new Map(rows.map(([u, ts]) => [u, { u, ts }]));
+    return { source: 'sample', files: [], skipped: 0, hasPendingFile: true, savedAt: null, following: toMap(following), followers: toMap(followers), pending: toMap(pending) };
+  })();
+
+  const TABS = {
+    notback: {
+      title: (n) => `${num(n)} ${plural(n, 'account')} you follow that ${n === 1 ? 'doesn’t' : 'don’t'} follow you back`,
+      when: (r) => (r.ts ? 'Following since ' + fmt(r.ts) : ''),
+      empty: 'Everyone you follow follows you back.',
+    },
+    fans: {
+      title: (n) => `${num(n)} ${plural(n, 'account')} that ${n === 1 ? 'follows' : 'follow'} you without a follow back`,
+      when: (r) => (r.ts ? 'Follows you since ' + fmt(r.ts) : ''),
+      empty: 'You follow back every one of your followers.',
+    },
+    mutual: {
+      title: (n) => `${num(n)} ${plural(n, 'account')} that follow you and you follow back`,
+      when: (r) => [r.ts ? 'Following since ' + fmt(r.ts) : '', r.ts2 ? 'Follows you since ' + fmt(r.ts2) : ''].filter(Boolean).join(' · '),
+      empty: 'No mutual follows yet.',
+    },
+    pending: {
+      title: (n) => `${num(n)} follow ${plural(n, 'request')} you sent, still waiting`,
+      when: (r) => (r.ts ? 'Requested ' + fmt(r.ts) : ''),
+      empty: 'No pending requests.',
+    },
+  };
+
+  function loadJSON(k) {
+    try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v && typeof v === 'object' ? v : null; } catch (e) { return null; }
+  }
+  function saveJSON(k, v) {
+    try {
+      if (v == null) { localStorage.removeItem(k); return; }
+      const s = JSON.stringify(v);
+      if (s.length > 3000000) return;
+      localStorage.setItem(k, s);
+    } catch (e) { /* storage unavailable: the page works without it */ }
+  }
+
+  const state = { data: null, lists: null, tab: 'notback', q: '', sort: 'name', hideDone: false, done: loadJSON(DONE_KEY) || {} };
+  const doneKey = (u) => state.tab + ':' + u;
+  const isDone = (u) => !!state.done[doneKey(u)];
+  function setDone(u, v) { if (v) state.done[doneKey(u)] = 1; else delete state.done[doneKey(u)]; saveJSON(DONE_KEY, state.done); }
+
+  let toastTimer = 0;
+  function showToast(msg) {
+    el.toast.textContent = msg; el.toast.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.toast.hidden = true; }, 2400);
+  }
+  function setStatus(msg, isError) { el.status.textContent = msg || ''; el.status.classList.toggle('error', !!isError); }
+
+  function load(data) {
+    state.data = data; state.lists = derive(data);
+    if (state.tab === 'pending' && !data.hasPendingFile) state.tab = 'notback';
+    renderAll();
+  }
+  function setTile(k, v, sub) { $('#v-' + k).textContent = num(v); $('#s-' + k).textContent = sub; }
+  function renderAll() {
+    const d = state.data, L = state.lists;
+    el.banner.className = 'banner ' + (d.source === 'sample' ? 'sample' : 'loaded');
+    el.banner.replaceChildren();
+    if (d.source === 'sample') {
+      el.banner.textContent = 'Example data so you can see the layout. Drop your own export above to replace it.';
+    } else {
+      const t = document.createElement('span');
+      t.textContent = 'Loaded ' + (d.files.length ? d.files.join(', ') : 'your files')
+        + (d.savedAt ? ' · kept in this browser since ' + fmt(d.savedAt / 1000) : '')
+        + (d.skipped ? ` · ${d.skipped} other ${plural(d.skipped, 'file')} ignored` : '');
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn small'; b.id = 'clear'; b.textContent = 'Clear';
+      b.addEventListener('click', () => { saveJSON(DATA_KEY, null); setStatus(''); state.tab = 'notback'; load(SAMPLE); });
+      el.banner.append(t, b);
+    }
+    const nf = d.following.size, nw = d.followers.size;
+    el.ledger.replaceChildren();
+    el.ledger.append('You follow ', strong(num(nf)), ` ${plural(nf, 'account')}. `, strong(num(nw)), ` ${plural(nw, 'account')} ${nw === 1 ? 'follows' : 'follow'} you.`);
+    setTile('notback', L.notback.length, pct(L.notback.length, nf) + ' of who you follow');
+    setTile('fans', L.fans.length, pct(L.fans.length, nw) + ' of your followers');
+    setTile('mutual', L.mutual.length, pct(L.mutual.length, nf) + ' of who you follow');
+    setTile('pending', L.pending.length, 'sent, not accepted yet');
+    $('#tab-pending').hidden = !d.hasPendingFile;
+    el.tiles.classList.toggle('four', !!d.hasPendingFile);
+    renderList();
+  }
+  function strong(text) { const s = document.createElement('strong'); s.textContent = text; return s; }
+
+  function visibleRows() {
+    let rows = state.lists[state.tab].slice();
+    const q = state.q.trim().toLowerCase().replace(/^@/, '');
+    if (q) rows = rows.filter((r) => r.u.includes(q));
+    if (state.hideDone) rows = rows.filter((r) => !isDone(r.u));
+    if (state.sort === 'name') rows.sort((a, b) => (a.u < b.u ? -1 : a.u > b.u ? 1 : 0));
+    else if (state.sort === 'new') rows.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    else rows.sort((a, b) => (a.ts || 1e15) - (b.ts || 1e15));
+    return rows;
+  }
+  function updateMeta(shown) {
+    const all = state.lists[state.tab];
+    const handled = all.filter((r) => isDone(r.u)).length;
+    const parts = [];
+    if (shown !== all.length) parts.push(`Showing ${num(shown)} of ${num(all.length)}`);
+    if (handled) parts.push(`${num(handled)} handled`);
+    el.listMeta.textContent = parts.join(' · ');
+  }
+  function rowNode(r) {
+    const li = document.createElement('li');
+    li.className = 'row' + (isDone(r.u) ? ' done' : '');
+    const lab = document.createElement('label'); lab.className = 'chk';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = isDone(r.u);
+    cb.setAttribute('aria-label', 'Mark @' + r.u + ' as handled');
+    cb.addEventListener('change', () => {
+      setDone(r.u, cb.checked);
+      li.classList.toggle('done', cb.checked);
+      if (state.hideDone && cb.checked) li.remove();
+      const shown = el.list.children.length;
+      updateMeta(shown);
+      if (!shown) { el.list.hidden = true; el.empty.hidden = false; el.empty.textContent = 'Everything here is handled. Untick “Hide handled” to see the list.'; }
+    });
+    lab.appendChild(cb);
+    let h;
+    if (state.data.source === 'sample') {
+      h = document.createElement('span'); h.className = 'handle'; h.textContent = '@' + r.u;
+    } else {
+      h = document.createElement('a'); h.className = 'handle';
+      h.href = 'https://www.instagram.com/' + encodeURIComponent(r.u) + '/';
+      h.target = '_blank'; h.rel = 'noopener noreferrer';
+      h.textContent = '@' + r.u; h.insertAdjacentHTML('beforeend', ARROW);
+    }
+    const w = document.createElement('span'); w.className = 'when'; w.textContent = TABS[state.tab].when(r);
+    li.append(lab, h, w);
+    return li;
+  }
+  function renderList() {
+    for (const t of el.tiles.querySelectorAll('.tile')) t.setAttribute('aria-selected', String(t.dataset.tab === state.tab));
+    el.list.setAttribute('aria-labelledby', 'tab-' + state.tab);
+    const all = state.lists[state.tab], rows = visibleRows();
+    el.listTitle.textContent = TABS[state.tab].title(all.length);
+    updateMeta(rows.length);
+    const frag = document.createDocumentFragment();
+    for (const r of rows) frag.appendChild(rowNode(r));
+    el.list.replaceChildren(frag);
+    el.list.hidden = rows.length === 0;
+    el.empty.hidden = rows.length !== 0;
+    if (!rows.length) {
+      el.empty.textContent = all.length === 0 ? TABS[state.tab].empty
+        : state.q.trim() ? 'No username matches “' + state.q.trim() + '”.'
+        : 'Everything here is handled. Untick “Hide handled” to see the list.';
+    }
+  }
+
+  let busy = false;
+  async function handleFiles(files) {
+    if (busy || !files.length) return;
+    busy = true; el.drop.classList.add('busy');
+    setStatus('Reading ' + (files.length === 1 ? files[0].name : files.length + ' files') + '…');
+    try {
+      const data = await ingest(files);
+      saveJSON(DATA_KEY, pack(data));
+      setStatus('');
+      state.tab = 'notback'; state.q = ''; el.q.value = '';
+      load(data);
+      const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      el.banner.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+    } catch (e) {
+      setStatus(e && e.message ? e.message : 'Something went wrong while reading the files.', true);
+    } finally {
+      busy = false; el.drop.classList.remove('busy');
+    }
+  }
+
+  el.tiles.addEventListener('click', (e) => {
+    const t = e.target.closest('.tile'); if (!t) return;
+    state.tab = t.dataset.tab; renderList();
+  });
+  el.tiles.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const tabs = [...el.tiles.querySelectorAll('.tile:not([hidden])')];
+    const i = tabs.findIndex((t) => t.dataset.tab === state.tab); if (i < 0) return;
+    const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+    state.tab = next.dataset.tab; renderList(); next.focus(); e.preventDefault();
+  });
+  el.q.addEventListener('input', () => { state.q = el.q.value; renderList(); });
+  el.sort.addEventListener('change', () => { state.sort = el.sort.value; renderList(); });
+  el.hideDone.addEventListener('change', () => { state.hideDone = el.hideDone.checked; renderList(); });
+  el.copy.addEventListener('click', () => {
+    const rows = visibleRows();
+    if (!rows.length) { showToast('Nothing to copy'); return; }
+    const text = rows.map((r) => r.u).join('\n');
+    const ok = () => showToast(`Copied ${num(rows.length)} ${plural(rows.length, 'username')}`);
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select();
+      let done = false;
+      try { done = document.execCommand('copy'); } catch (e) { done = false; }
+      document.body.removeChild(ta);
+      if (done) ok(); else showToast('Copy is blocked here. Select the list and copy it by hand.');
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fallback);
+    else fallback();
+  });
+
+  el.drop.addEventListener('click', () => { if (!busy) el.file.click(); });
+  el.file.addEventListener('change', () => { const files = [...el.file.files]; el.file.value = ''; handleFiles(files); });
+  const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+  for (const t of ['dragenter', 'dragover']) document.addEventListener(t, (e) => { if (hasFiles(e)) { e.preventDefault(); el.drop.classList.add('over'); } });
+  document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) el.drop.classList.remove('over'); });
+  document.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); el.drop.classList.remove('over');
+    handleFiles([...e.dataTransfer.files]);
+  });
+
+  function start(saved) {
+    const h = (location.hash || '').slice(1);
+    if (TABS[h]) state.tab = h;
+    let data = null;
+    try { data = saved && saved.data ? unpack(saved.data) : null; } catch (e) { data = null; }
+    if (data && saved && TABS[saved.tab]) state.tab = saved.tab;
+    if (!data) data = unpack(loadJSON(DATA_KEY));
+    load(data || SAMPLE);
+  }
+start({});
+})();
+</script>
+</body>
+</html>

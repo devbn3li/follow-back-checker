@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Follow Check</string>
+    <string name="intro_title">Welcome</string>
+    <string name="intro_body">Log in to Instagram as usual. Then tap the Follow check button at the bottom of the page to see who doesn\'t follow you back.</string>
+    <string name="intro_ok">Got it</string>
+</resources>
