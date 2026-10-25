@@ -129,9 +129,9 @@ test('parseUsernames reads pasted text and exported files', () => {
   assert.deepEqual(core.parseUsernames('["x", "Y", {"username": "Z"}]'), ['x', 'y', 'z']);
   assert.deepEqual(core.parseUsernames('{"protected": ["one", "two"]}'), ['one', 'two']);
   assert.deepEqual(core.parseUsernames('[{"id": "1", "username": "deep"}, {"u": "er"}]'), ['deep', 'er']);
-  assert.deepEqual(core.parseUsernames('not valid name!! @ok.name'), ['ok.name']);
+  assert.deepEqual(core.parseUsernames('name!! #tag @ok.name'), ['ok.name']);
   assert.deepEqual(core.parseUsernames(''), []);
-  assert.deepEqual(core.parseUsernames('{broken json'), ['broken', 'json'], 'broken JSON is read as plain words');
+  assert.deepEqual(core.parseUsernames('{broken json'), ['json'], 'broken JSON is read as plain words; tokens that are not usernames are dropped');
 });
 
 test('toCsv quotes every cell and escapes quotes', () => {
