@@ -36,6 +36,8 @@ The app is a single screen with Instagram's website inside it and the checker in
 - Four tiles: don't follow you back, you don't follow back, follow each other, history. Usernames open the profile in a new tab. Tick a row to mark it handled.
 - **History** records a point per check and an event per change (followed you, unfollowed you, you followed, you unfollowed), each dated by the check that noticed it, with a chart of followers and following over time.
 - **On any profile page** a pill says whether that account follows you, answered from your last check with no request; tap it for a live answer.
+- **Protected accounts**: accounts you follow on purpose (friends, brands, news) stay out of "don't follow you back". Tap Protect on a row, or paste and import lists; export them as JSON.
+- **Filters and downloads**: profile pictures on every row, a verified tag, filters for verified/private/public accounts, and a CSV download of any list or of the history (the Android app saves it to Downloads).
 - Several Instagram accounts in one browser are kept apart; the panel follows whoever is logged in.
 
 ## Keep it safe

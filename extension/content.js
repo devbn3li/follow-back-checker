@@ -15,7 +15,7 @@
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -31,7 +31,7 @@
     friendship: (id) => `/api/v1/friendships/show/${id}/`,
   };
   // Pause between page requests, and the back-off when Instagram answers "wait a few minutes".
-  const PACE = { minDelayMs: 1200, jitterMs: 1600, rateLimitWaitMs: 90000, rateLimitRetries: 2 };
+  const PACE = { minDelayMs: 1200, jitterMs: 1600, rateLimitWaitMs: 90000, rateLimitRetries: 2, longPauseEvery: 15, longPauseMs: 10000 };
   // How many "follow you, not followed back" accounts are double-checked one by one after a check.
   const VERIFY_MAX = 20;
 
@@ -134,6 +134,7 @@
   const acctStoreKey = (uid) => 'fbc.acct.' + uid;
   const doneStoreKey = (uid) => 'fbc.done.' + uid;
   const histStoreKey = (uid) => 'fbc.hist.' + uid;
+  const whiteStoreKey = (uid) => 'fbc.white.' + uid;
   const HIST_CAPS = { points: 400, events: 3000 };
 
   // --- Instagram requests
@@ -163,7 +164,7 @@
   async function fetchList(kind, userId, onProgress, ctl, opts) {
     const o = opts || {};
     const out = new Map();
-    let maxId = '', retries = 0, dupes = 0;
+    let maxId = '', retries = 0, dupes = 0, requests = 0;
     for (;;) {
       if (ctl.cancelled) throw new Cancelled();
       let j;
@@ -186,7 +187,10 @@
       onProgress(out.size, null);
       maxId = j.next_max_id != null && j.next_max_id !== '' ? String(j.next_max_id) : '';
       if (!maxId || users.length === 0) break;
-      await sleep(PACE.minDelayMs + Math.random() * PACE.jitterMs, ctl);
+      requests++;
+      // A longer pause every few pages keeps big accounts gentle on Instagram's limits.
+      const extra = requests % PACE.longPauseEvery === 0 ? PACE.longPauseMs : 0;
+      await sleep(extra + PACE.minDelayMs + Math.random() * PACE.jitterMs, ctl);
     }
     return { users: out, dupes };
   }
@@ -284,7 +288,8 @@
     mutual: { label: 'tileMutual', title: 'titleMutual', empty: 'emptyMutual' },
     changes: { label: 'tileHistory', title: 'titleHistory', empty: '' },
   };
-  const state = { uid: '', snap: null, prev: null, done: {}, lists: null, hist: null, evFilter: 'all', tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0 };
+  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, lists: null, hist: null, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0 };
+  const live = { following: 0, followers: 0 };
   const ui = {};
   // Small preferences, remembered across visits: language, panel width, and the pause after Instagram asks us to slow down.
   const UI_KEY = 'fbc.ui';
@@ -359,16 +364,33 @@
     ui.hideDone = h('input', { type: 'checkbox', onchange: () => { state.hideDone = ui.hideDone.checked; renderList(); } });
     ui.hideDoneText = h('span');
     ui.hideDoneWrap = h('label', { class: 'chk' }, ui.hideDone, ui.hideDoneText);
+    ui.showProtected = h('input', { type: 'checkbox', onchange: () => { state.showProtected = ui.showProtected.checked; renderList(); } });
+    ui.showProtectedText = h('span');
+    ui.showProtectedWrap = h('label', { class: 'chk', hidden: true }, ui.showProtected, ui.showProtectedText);
+    ui.kindOpts = ['all', 'verified', 'notVerified', 'private', 'public'].map((v) => h('option', { value: v }));
+    ui.kindFilter = h('select', { class: 'field sel', onchange: () => { state.kind = ui.kindFilter.value; renderList(); } }, ui.kindOpts);
     ui.filterOpts = ['all', 'others', 'gained', 'lost', 'you_followed', 'you_unfollowed'].map((v) => h('option', { value: v }));
     ui.evFilter = h('select', { class: 'field sel', hidden: true, onchange: () => { state.evFilter = ui.evFilter.value; renderList(); } }, ui.filterOpts);
     ui.copy = h('button', { class: 'btn small', type: 'button', onclick: () => copyList() });
-    ui.toolbar = h('div', { class: 'toolbar' }, ui.search, ui.hideDoneWrap, ui.evFilter, ui.copy);
+    ui.download = h('button', { class: 'btn small', type: 'button', onclick: () => downloadCurrent() });
+    ui.protectedBtn = h('button', { class: 'btn small', type: 'button', onclick: () => { state.tab = 'protected'; renderList(); } });
+    ui.toolbar = h('div', { class: 'toolbar' }, ui.search, ui.hideDoneWrap, ui.showProtectedWrap, ui.kindFilter, ui.evFilter, ui.copy, ui.download, ui.protectedBtn);
     ui.listTitle = h('div', { class: 'listtitle' });
     ui.chart = h('div', { class: 'charthost', hidden: true });
+    // Protected accounts: paste, import, export, and the list itself.
+    ui.protHint = h('div', { class: 'hint' });
+    ui.protText = h('textarea', { class: 'field area', rows: '3', spellcheck: 'false' });
+    ui.protAdd = h('button', { class: 'btn small primary', type: 'button', onclick: () => addProtectedFromText() });
+    ui.protFile = h('input', { type: 'file', accept: '.json,.txt,.csv,application/json,text/plain,text/csv', hidden: true, onchange: () => importProtectedFile() });
+    ui.protImport = h('button', { class: 'btn small', type: 'button', onclick: () => ui.protFile.click() });
+    ui.protExport = h('button', { class: 'btn small', type: 'button', onclick: () => exportProtected() });
+    ui.protList = h('div', { class: 'list' });
+    ui.protEmpty = h('div', { class: 'empty', hidden: true });
+    ui.prot = h('div', { class: 'prot', hidden: true }, ui.protHint, ui.protText, h('div', { class: 'toolbar' }, ui.protAdd, ui.protImport, ui.protExport, ui.protFile), ui.protList, ui.protEmpty);
     ui.list = h('div', { class: 'list' });
     ui.empty = h('div', { class: 'empty', hidden: true });
     ui.notice = h('div', { class: 'notice', hidden: true });
-    ui.results = h('div', { class: 'results', hidden: true }, ui.ledger, ui.notice, ui.tiles, ui.toolbar, ui.listTitle, ui.chart, ui.list);
+    ui.results = h('div', { class: 'results', hidden: true }, ui.ledger, ui.notice, ui.tiles, ui.toolbar, ui.listTitle, ui.chart, ui.prot, ui.list);
     ui.toast = h('div', { class: 'toast', role: 'status', hidden: true });
     ui.grip = h('div', { class: 'grip' });
     ui.foot = h('footer', { class: 'foot' });
@@ -412,10 +434,21 @@
     const optKeys = ['filterAll', 'filterOthers', 'filterGained', 'filterLost', 'filterYouFollowed', 'filterYouUnfollowed'];
     ui.filterOpts.forEach((o, i) => { o.textContent = t(optKeys[i]); });
     for (const k of Object.keys(TABS)) ui.tile[k].label.textContent = t(TABS[k].label);
+    ui.showProtectedText.textContent = t('showProtected');
+    const kindKeys = ['kindAll', 'kindVerified', 'kindNotVerified', 'kindPrivate', 'kindPublic'];
+    ui.kindOpts.forEach((o, i) => { o.textContent = t(kindKeys[i]); });
+    ui.download.textContent = t('download');
+    ui.protAdd.textContent = t('add');
+    ui.protImport.textContent = t('importBtn');
+    ui.protExport.textContent = t('exportBtn');
+    ui.protText.placeholder = t('protectedPlaceholder');
+    ui.protHint.textContent = t('protectedHint');
+    updateProtectedBtn();
     ui.foot.textContent = t('footer');
     ui.grip.title = t('gripTitle');
     ui.rel.title = t('pillTitle');
   }
+  function updateProtectedBtn() { ui.protectedBtn.textContent = t('protectedBtn', { n: num(Object.keys(state.white).length) }); }
   function setLang(l, silent) {
     lang = l;
     if (!silent) saveUi();
@@ -459,10 +492,14 @@
     ui.progress.hidden = false;
     let text;
     if (p.wait != null) text = t('progSlow', { s: p.wait });
-    else if (p.phase === 'info') text = t('progInfo');
+    else if (p.phase === 'info') { text = t('progInfo'); live.following = 0; live.followers = 0; }
     else if (p.phase === 'verify') text = t('progVerify', { n: num(p.n), total: num(p.total) });
     else text = t('progFetch', { phase: t(p.phase === 'followers' ? 'phaseFollowers' : 'phaseFollowing'), n: num(p.n), of: p.total ? t('progOf', { total: num(p.total) }) : '' });
     ui.ptext.textContent = text;
+    if (p.phase === 'following' || p.phase === 'followers') {
+      live[p.phase] = p.n || 0;
+      ui.ledger.textContent = t('ledgerLive', { nf: num(live.following), nw: num(live.followers) }); // counts up while the check runs
+    }
     const frac = p.total ? Math.min(1, (p.n || 0) / p.total) : 0;
     let width = 0.02;
     if (p.phase === 'following') width = frac * 0.45;
@@ -499,8 +536,16 @@
     if (partial && partial.followers) notes.push(t('partialWarn', { got: num(partial.followers.got), total: num(partial.followers.total), what: t('partialFollowers') }));
     ui.notice.textContent = notes.join(' ');
     ui.notice.hidden = notes.length === 0;
+    applyTiles();
+    renderList();
+  }
+  function applyTiles() {
     const L = state.lists;
-    setTile('notback', num(L.notback.length), t('subOfFollowing', { pct: pct(L.notback.length, nf) }));
+    if (!L || !state.snap) return;
+    const nf = state.snap.following.length, nw = state.snap.followers.length;
+    const protectedN = L.notback.filter((r) => isProtected(r.u)).length;
+    const shown = L.notback.length - protectedN;
+    setTile('notback', num(shown), t('subOfFollowing', { pct: pct(shown, nf) }) + (protectedN ? ' · ' + t('nProtected', { n: num(protectedN) }) : ''));
     setTile('fans', num(L.fans.length), t('subOfFollowers', { pct: pct(L.fans.length, nw) }));
     setTile('mutual', num(L.mutual.length), t('subOfFollowing', { pct: pct(L.mutual.length, nf) }));
     const pts = state.hist && Array.isArray(state.hist.points) ? state.hist.points : [];
@@ -508,7 +553,6 @@
     const g = groupEvents(state.hist && Array.isArray(state.hist.events) ? state.hist.events : []).find((x) => x.at === lastAt);
     if (pts.length >= 2) setTile('changes', `+${num(g ? g.gained : 0)} / −${num(g ? g.lost : 0)}`, t('subHistory'), true);
     else setTile('changes', '—', t('subHistoryNone'));
-    renderList();
   }
   function visible(rows) {
     const q = state.q.trim().toLowerCase().replace(/^@/, '');
@@ -521,6 +565,98 @@
     if (v) state.done[doneKey(u)] = 1; else delete state.done[doneKey(u)];
     if (state.uid) storageSet({ [doneStoreKey(state.uid)]: state.done });
   }
+  // Protected accounts: followed on purpose, kept out of "don't follow you back".
+  const isProtected = (u) => !!state.white[u];
+  function saveWhite() {
+    if (state.uid) storageSet({ [whiteStoreKey(state.uid)]: state.white });
+    updateProtectedBtn();
+  }
+  function setProtected(u, v) {
+    if (v) state.white[u] = 1; else delete state.white[u];
+    saveWhite();
+  }
+  function addProtected(names) {
+    let added = 0;
+    for (const u of names) if (!state.white[u]) { state.white[u] = 1; added++; }
+    saveWhite();
+    toast(added ? t('toastAdded', { n: num(added) }) : t('toastNothingToAdd'));
+    applyTiles();
+    renderList();
+  }
+  function addProtectedFromText() {
+    const names = parseUsernames(ui.protText.value);
+    if (!names.length) { toast(t('toastNothingToAdd')); return; }
+    ui.protText.value = '';
+    addProtected(names);
+  }
+  function importProtectedFile() {
+    const f = ui.protFile.files && ui.protFile.files[0];
+    ui.protFile.value = '';
+    if (!f) return;
+    f.text().then((text) => addProtected(parseUsernames(text)), () => toast(t('toastNothingToAdd')));
+  }
+  function exportProtected() {
+    const names = Object.keys(state.white).sort();
+    if (!names.length) { toast(t('toastNothing')); return; }
+    downloadText('follow-check-protected.json', 'application/json', JSON.stringify({ protected: names }, null, 2));
+  }
+  function lookupRecord(u) {
+    const s = state.snap;
+    if (!s) return null;
+    return s.following.find((r) => r.u === u) || s.followers.find((r) => r.u === u) || null;
+  }
+  // Saves a text file: through the Android app when it hosts the page, otherwise as a browser download.
+  function downloadText(name, mime, text) {
+    try {
+      const bridge = window.FollowCheckHost;
+      if (bridge && typeof bridge.saveText === 'function') {
+        const ok = bridge.saveText(name, mime, text);
+        toast(ok ? t('toastSaved', { name }) : t('toastSaveFailed'));
+        return;
+      }
+    } catch (e) { /* fall through to the browser download */ }
+    try {
+      const blob = new Blob([text], { type: mime + ';charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = h('a', { href: url, download: name });
+      root.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast(t('toastSaved', { name }));
+    } catch (e) {
+      toast(t('toastSaveFailed'));
+    }
+  }
+  function downloadCurrent() {
+    if (!state.lists) return;
+    const profile = (u) => 'https://www.instagram.com/' + u + '/';
+    if (state.tab === 'protected') { exportProtected(); return; }
+    let rows, name;
+    if (state.tab === 'changes') {
+      const evs = filteredEvents();
+      if (!evs.length) { toast(t('toastNothing')); return; }
+      rows = [['date', 'event', 'username', 'name', 'profile']].concat(evs.map((e) => [new Date(e.at).toISOString(), e.type, e.u, e.name || '', profile(e.u)]));
+      name = 'follow-check-history.csv';
+    } else {
+      const list = listRows();
+      if (!list.length) { toast(t('toastNothing')); return; }
+      const yes = (v) => (v ? 'yes' : 'no');
+      rows = [['username', 'name', 'private', 'verified', 'protected', 'handled', 'profile']]
+        .concat(list.map((r) => [r.u, r.name || '', yes(r.priv), yes(r.ver), yes(isProtected(r.u)), yes(isDone(r.u)), profile(r.u)]));
+      name = 'follow-check-' + state.tab + '.csv';
+    }
+    downloadText(name, 'text/csv', '﻿' + toCsv(rows));
+  }
+  function avatarNode(r) {
+    if (r.pic) {
+      const img = h('img', { class: 'avatar', src: r.pic, alt: '', loading: 'lazy' });
+      // Instagram's picture links expire after a while; fall back to the first letter.
+      img.addEventListener('error', () => img.replaceWith(h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase())));
+      return img;
+    }
+    return h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase());
+  }
   function rowNode(r, withCheck) {
     const row = h('div', { class: 'row' + (withCheck && isDone(r.u) ? ' done' : '') });
     if (withCheck) {
@@ -532,10 +668,25 @@
       });
       row.append(h('label', { class: 'chk' }, cb));
     }
+    row.append(avatarNode(r));
     row.append(h('div', { class: 'who' },
       h('a', { class: 'handle', href: 'https://www.instagram.com/' + encodeURIComponent(r.u) + '/', target: '_blank', rel: 'noopener noreferrer' }, '@' + r.u, h('span', { class: 'arrow' }, '↗')),
       r.name ? h('div', { class: 'name', title: r.name }, r.name) : null));
+    if (r.ver) row.append(h('span', { class: 'tag ver' }, t('verifiedTag')));
     if (r.priv) row.append(h('span', { class: 'tag' }, t('privateTag')));
+    if (withCheck) {
+      const on = isProtected(r.u);
+      const pb = h('button', { class: 'protect' + (on ? ' on' : ''), type: 'button', title: t('protectTitle') }, on ? t('protectedLabel') : t('protect'));
+      pb.addEventListener('click', () => {
+        const now = !isProtected(r.u);
+        setProtected(r.u, now);
+        pb.classList.toggle('on', now);
+        pb.textContent = now ? t('protectedLabel') : t('protect');
+        applyTiles();
+        if (state.tab === 'notback' && now && !state.showProtected) { row.remove(); if (!ui.list.children.length) renderList(); }
+      });
+      row.append(pb);
+    }
     if (withCheck) {
       // The lists come from the last check; this asks Instagram about this one account right now.
       const vb = h('button', { class: 'verify', type: 'button', title: t('verifyTitle') }, t('verify'));
@@ -569,29 +720,59 @@
       btn.disabled = false;
     }
   }
+  // The rows of the current list tab after every filter: search, protected, handled, account kind.
+  function listRows() {
+    let rows = visible(state.lists[state.tab]);
+    if (state.tab === 'notback' && !state.showProtected) rows = rows.filter((r) => !isProtected(r.u));
+    if (state.hideDone) rows = rows.filter((r) => !isDone(r.u));
+    if (state.kind !== 'all') rows = rows.filter((r) => matchesKind(r, state.kind));
+    return rows.slice().sort((a, b) => (a.u < b.u ? -1 : a.u > b.u ? 1 : 0));
+  }
+  function renderProtected() {
+    ui.listTitle.textContent = t('protectedTitle');
+    const names = Object.keys(state.white).sort();
+    ui.protList.replaceChildren();
+    for (const u of names) {
+      const row = rowNode(lookupRecord(u) || { u, name: '', priv: false, ver: false, pic: '' }, false);
+      row.append(h('button', { class: 'verify', type: 'button', onclick: () => { setProtected(u, false); applyTiles(); renderList(); } }, t('remove')));
+      ui.protList.append(row);
+    }
+    ui.protList.hidden = names.length === 0;
+    ui.protEmpty.hidden = names.length !== 0;
+    ui.protEmpty.textContent = t('protectedEmpty');
+  }
   function renderList() {
     for (const el of ui.tiles.children) el.setAttribute('aria-selected', String(el.dataset.tab === state.tab));
     ui.list.replaceChildren();
     if (!state.lists) return;
-    const history = state.tab === 'changes';
+    const history = state.tab === 'changes', prot = state.tab === 'protected';
     ui.chart.hidden = !history;
     ui.evFilter.hidden = !history;
-    ui.hideDoneWrap.hidden = history;
+    ui.hideDoneWrap.hidden = history || prot;
+    ui.kindFilter.hidden = history || prot;
+    ui.showProtectedWrap.hidden = state.tab !== 'notback';
+    ui.prot.hidden = !prot;
+    ui.list.hidden = prot;
+    ui.empty.hidden = true;
+    if (prot) { renderProtected(); return; }
     if (history) { renderHistory(); return; }
     const all = state.lists[state.tab];
-    let rows = visible(all);
-    if (state.hideDone) rows = rows.filter((r) => !isDone(r.u));
-    rows = rows.slice().sort((a, b) => (a.u < b.u ? -1 : a.u > b.u ? 1 : 0));
+    const base = state.tab === 'notback' ? all.filter((r) => !isProtected(r.u)) : all;
+    const rows = listRows();
     const handled = all.filter((r) => isDone(r.u)).length;
-    ui.listTitle.textContent = t(TABS[state.tab].title, { n: num(all.length), nRaw: all.length })
-      + (rows.length !== all.length ? ' · ' + t('showing', { n: num(rows.length) }) : '')
-      + (handled ? ' · ' + t('handled', { n: num(handled) }) : '');
+    const protectedN = all.length - base.length;
+    ui.listTitle.textContent = t(TABS[state.tab].title, { n: num(base.length), nRaw: base.length })
+      + (rows.length !== base.length ? ' · ' + t('showing', { n: num(rows.length) }) : '')
+      + (handled ? ' · ' + t('handled', { n: num(handled) }) : '')
+      + (protectedN ? ' · ' + t('nProtected', { n: num(protectedN) }) : '');
     for (const r of rows) ui.list.append(rowNode(r, true));
     ui.list.hidden = rows.length === 0;
     ui.empty.hidden = rows.length !== 0;
     if (!rows.length) {
       ui.empty.textContent = all.length === 0 ? t(TABS[state.tab].empty)
         : state.q.trim() ? t('noMatch', { q: state.q.trim() })
+        : state.kind !== 'all' ? t('histEmptyFilter')
+        : (state.tab === 'notback' && base.length === 0) ? t('allProtected')
         : t('allHandled');
     }
   }
@@ -725,9 +906,8 @@
   function currentUsernames() {
     if (!state.lists) return [];
     if (state.tab === 'changes') return [...new Set(filteredEvents().map((e) => e.u))];
-    let rows = visible(state.lists[state.tab]);
-    if (state.hideDone) rows = rows.filter((r) => !isDone(r.u));
-    return rows.map((r) => r.u).sort();
+    if (state.tab === 'protected') return Object.keys(state.white).sort();
+    return listRows().map((r) => r.u);
   }
   function copyList() {
     const names = currentUsernames();
@@ -806,11 +986,12 @@
   async function loadAccount(uid) {
     const seq = ++loadSeq;
     state.uid = uid;
-    state.snap = null; state.prev = null; state.done = {}; state.lists = null; state.hist = null;
+    state.snap = null; state.prev = null; state.done = {}; state.white = {}; state.lists = null; state.hist = null;
     state.tab = 'notback';
+    updateProtectedBtn();
     applySnapshot();
     if (!uid) return;
-    const r = await storageGet([acctStoreKey(uid), doneStoreKey(uid), histStoreKey(uid), 'fbc', 'fbcDone']);
+    const r = await storageGet([acctStoreKey(uid), doneStoreKey(uid), histStoreKey(uid), whiteStoreKey(uid), 'fbc', 'fbcDone']);
     if (seq !== loadSeq) return; // another account took over while loading
     let acct = r[acctStoreKey(uid)];
     let done = r[doneStoreKey(uid)];
@@ -822,6 +1003,9 @@
     state.snap = acct && isSnap(acct.last) ? acct.last : null;
     state.prev = acct && isSnap(acct.prev) ? acct.prev : null;
     state.done = done && typeof done === 'object' ? done : {};
+    const white = r[whiteStoreKey(uid)];
+    state.white = white && typeof white === 'object' && !Array.isArray(white) ? white : {};
+    updateProtectedBtn();
     const hist = r[histStoreKey(uid)];
     if (hist && Array.isArray(hist.points) && Array.isArray(hist.events)) {
       state.hist = hist;

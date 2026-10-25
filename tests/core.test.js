@@ -115,3 +115,35 @@ test('num and pct format for the panel', () => {
   assert.equal(core.plural(1, 'account'), 'account');
   assert.equal(core.plural(2, 'account'), 'accounts');
 });
+
+test('normalizeUser keeps the picture link and the verified flag', () => {
+  const r = core.normalizeUser(raw('x', { is_verified: true, profile_pic_url: 'https://cdn.example/x.jpg' }));
+  assert.equal(r.ver, true);
+  assert.equal(r.pic, 'https://cdn.example/x.jpg');
+  assert.equal(core.normalizeUser(raw('y', { profile_pic_url: 'javascript:alert(1)' })).pic, '', 'only https pictures');
+  assert.equal(core.normalizeUser(raw('z')).ver, false);
+});
+
+test('parseUsernames reads pasted text and exported files', () => {
+  assert.deepEqual(core.parseUsernames('@Alice, bob.b\n carol_1 ; dave  alice'), ['alice', 'bob.b', 'carol_1', 'dave']);
+  assert.deepEqual(core.parseUsernames('["x", "Y", {"username": "Z"}]'), ['x', 'y', 'z']);
+  assert.deepEqual(core.parseUsernames('{"protected": ["one", "two"]}'), ['one', 'two']);
+  assert.deepEqual(core.parseUsernames('[{"id": "1", "username": "deep"}, {"u": "er"}]'), ['deep', 'er']);
+  assert.deepEqual(core.parseUsernames('not valid name!! @ok.name'), ['ok.name']);
+  assert.deepEqual(core.parseUsernames(''), []);
+  assert.deepEqual(core.parseUsernames('{broken json'), ['broken', 'json'], 'broken JSON is read as plain words');
+});
+
+test('toCsv quotes every cell and escapes quotes', () => {
+  assert.equal(core.toCsv([['a', 'b'], ['x "q"', null]]), '"a","b"\r\n"x ""q""",""');
+});
+
+test('matchesKind filters by verified and private', () => {
+  const v = { ver: true, priv: false }, p = { ver: false, priv: true };
+  assert.equal(core.matchesKind(v, 'verified'), true);
+  assert.equal(core.matchesKind(p, 'verified'), false);
+  assert.equal(core.matchesKind(p, 'notVerified'), true);
+  assert.equal(core.matchesKind(p, 'private'), true);
+  assert.equal(core.matchesKind(v, 'public'), true);
+  assert.equal(core.matchesKind(v, 'all'), true);
+});

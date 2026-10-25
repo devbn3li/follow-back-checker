@@ -69,6 +69,9 @@ class MainActivity : AppCompatActivity() {
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) { inject(view) }
         }
 
+        // Lets the checker save its CSV/JSON exports into Downloads (window.FollowCheckHost.saveText).
+        web.addJavascriptInterface(HostBridge(this), "FollowCheckHost")
+
         script = ScriptStore.load(this)
         if (savedInstanceState != null) web.restoreState(savedInstanceState) else web.loadUrl(HOME)
 

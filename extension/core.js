@@ -9,6 +9,7 @@
   const num = (v) => Number(v || 0).toLocaleString('en-US');
   const plural = (n, w) => (n === 1 ? w : w + 's');
   const pct = (a, b) => (b ? Math.round((100 * a) / b) + '%' : '0%');
+  const USERNAME = /^[a-z0-9._]{1,30}$/;
 
   // One account as Instagram's list endpoints describe it.
   function normalizeUser(u) {
@@ -20,6 +21,8 @@
       id: u.pk != null ? String(u.pk) : u.pk_id != null ? String(u.pk_id) : '',
       name: typeof u.full_name === 'string' ? u.full_name : '',
       priv: !!u.is_private,
+      ver: !!u.is_verified,
+      pic: typeof u.profile_pic_url === 'string' && /^https:\/\//.test(u.profile_pic_url) ? u.profile_pic_url : '',
     };
   }
 
@@ -97,7 +100,7 @@
     let first = seg[0];
     try { first = decodeURIComponent(first); } catch (e) { /* keep as is */ }
     first = first.toLowerCase();
-    if (RESERVED.has(first) || !/^[a-z0-9._]{1,30}$/.test(first)) return '';
+    if (RESERVED.has(first) || !USERNAME.test(first)) return '';
     return first;
   }
 
@@ -108,5 +111,52 @@
     return { key: 'pillNot', tone: 'warn' };
   }
 
-  return { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel };
+  // Usernames out of pasted text or an imported file: plain lists (any separators, with or
+  // without @), a JSON array of names or of objects with a username, or an object holding such
+  // an array under any key. Lowercased, validated, deduplicated, in first-seen order.
+  function parseUsernames(input) {
+    const out = [];
+    const seen = new Set();
+    const push = (v) => {
+      if (typeof v !== 'string') return;
+      const u = v.trim().replace(/^@/, '').toLowerCase();
+      if (USERNAME.test(u) && !seen.has(u)) { seen.add(u); out.push(u); }
+    };
+    const walk = (v, depth) => {
+      if (depth > 4 || v == null) return;
+      if (typeof v === 'string') { push(v); return; }
+      if (Array.isArray(v)) { v.forEach((x) => walk(x, depth + 1)); return; }
+      if (typeof v === 'object') {
+        if (typeof v.username === 'string') { push(v.username); return; }
+        if (typeof v.u === 'string') { push(v.u); return; }
+        Object.values(v).forEach((x) => walk(x, depth + 1));
+      }
+    };
+    const text = String(input || '');
+    const trimmed = text.trim();
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try { walk(JSON.parse(trimmed), 0); return out; } catch (e) { /* not JSON after all */ }
+    }
+    for (const token of text.split(/[\s,;]+/)) push(token);
+    return out;
+  }
+
+  // Rows of cells to CSV text (RFC 4180 quoting, CRLF lines).
+  function toCsv(rows) {
+    const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    return rows.map((cells) => cells.map(esc).join(',')).join('\r\n');
+  }
+
+  // Account filters for the lists.
+  function matchesKind(rec, kind) {
+    switch (kind) {
+      case 'verified': return !!rec.ver;
+      case 'notVerified': return !rec.ver;
+      case 'private': return !!rec.priv;
+      case 'public': return !rec.priv;
+      default: return true;
+    }
+  }
+
+  return { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind };
 });

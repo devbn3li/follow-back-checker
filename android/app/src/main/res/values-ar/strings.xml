@@ -4,4 +4,5 @@
     <string name="intro_title">أهلاً</string>
     <string name="intro_body">سجّل دخول إنستجرام عادي. بعدين دوس زرار \"فحص المتابعين\" اللي تحت علشان تعرف مين مش بيتابعك.</string>
     <string name="intro_ok">تمام</string>
+    <string name="saved_to_downloads">اتحفظ %1$s في Downloads</string>
 </resources>

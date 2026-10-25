@@ -179,6 +179,7 @@ html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area
       </select>
       <label class="chk" for="hideDone"><input type="checkbox" id="hideDone">Hide handled</label>
       <button type="button" class="btn" id="copy">Copy usernames</button>
+      <button type="button" class="btn" id="csv">Download CSV</button>
     </div>
     <ul class="list" id="list" role="tabpanel"></ul>
     <p class="empty" id="empty" hidden></p>
@@ -199,7 +200,7 @@ html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area
   const el = {
     drop: $('#drop'), file: $('#file'), status: $('#status'),
     banner: $('#banner'), ledger: $('#ledger'), tiles: $('#tiles'),
-    q: $('#q'), sort: $('#sort'), hideDone: $('#hideDone'), copy: $('#copy'),
+    q: $('#q'), sort: $('#sort'), hideDone: $('#hideDone'), copy: $('#copy'), csv: $('#csv'),
     listTitle: $('#listTitle'), listMeta: $('#listMeta'), list: $('#list'), empty: $('#empty'), toast: $('#toast'),
   };
   const DONE_KEY = 'fbc:done:v1', DATA_KEY = 'fbc:data:v1';
@@ -559,6 +560,24 @@ html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area
   el.q.addEventListener('input', () => { state.q = el.q.value; renderList(); });
   el.sort.addEventListener('change', () => { state.sort = el.sort.value; renderList(); });
   el.hideDone.addEventListener('change', () => { state.hideDone = el.hideDone.checked; renderList(); });
+  el.csv.addEventListener('click', () => {
+    const rows = visibleRows();
+    if (!rows.length) { showToast('Nothing to download'); return; }
+    const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const line = (cells) => cells.map(esc).join(',');
+    const lines = [line(['username', 'profile', 'since'])];
+    for (const r of rows) lines.push(line([r.u, 'https://www.instagram.com/' + r.u + '/', r.ts ? new Date(r.ts * 1000).toISOString().slice(0, 10) : '']));
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'follow-back-' + state.tab + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    showToast(`Downloaded ${num(rows.length)} ${plural(rows.length, 'row')}`);
+  });
   el.copy.addEventListener('click', () => {
     const rows = visibleRows();
     if (!rows.length) { showToast('Nothing to copy'); return; }

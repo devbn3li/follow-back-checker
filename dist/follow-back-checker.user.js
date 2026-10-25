@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Follow Back Checker
 // @namespace    https://github.com/devbn3li/follow-back-checker
-// @version      1.2.3
+// @version      1.3.0
 // @description  Who you follow that does not follow you back, from your own logged-in instagram.com session. Nothing leaves the browser.
 // @author       devbn3li
 // @match        https://www.instagram.com/*
@@ -11,7 +11,7 @@
 // @downloadURL  https://raw.githubusercontent.com/devbn3li/follow-back-checker/main/dist/follow-back-checker.user.js
 // ==/UserScript==
 
-/* Follow Back Checker 1.2.3. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+/* Follow Back Checker 1.3.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
 // Panel styles. Injected into a shadow root by content.js, so Instagram's own CSS cannot leak in
 // and a strict page CSP cannot block them (they go in through a constructed stylesheet).
 var FBC_CSS = `
@@ -134,6 +134,15 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .chip.good { color: var(--good); border-color: var(--good); }
 .chip.warn { color: var(--warn); border-color: var(--warn); }
 .chip.live { color: var(--fg); border-color: var(--accent); }
+.avatar { flex: none; width: 28px; height: 28px; border-radius: 50%; object-fit: cover; background: var(--bg2); }
+.avatar.ph { display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--muted); }
+.tag.ver { color: var(--accent); border-color: var(--accent); }
+.protect { flex: none; background: none; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted); padding: 2px 7px; cursor: pointer; white-space: nowrap; }
+.protect:hover { border-color: var(--accent); color: var(--fg); }
+.protect.on { background: var(--accent-soft); border-color: var(--accent); color: var(--fg); }
+.prot { display: grid; gap: 10px; }
+.hint { font-size: 12.5px; color: var(--muted); }
+.field.area { width: 100%; min-height: 64px; resize: vertical; font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; font-size: 13px; direction: ltr; }
 .verify { flex: none; background: none; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted); padding: 2px 7px; cursor: pointer; white-space: nowrap; }
 .verify:hover { border-color: var(--accent); color: var(--fg); }
 .verify:disabled { opacity: 0.6; cursor: progress; }
@@ -171,7 +180,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 :host(.mobile) .drawer { width: 100vw; }
 :host(.mobile) .btn { padding: 11px 16px; }
 :host(.mobile) .btn.small { padding: 8px 12px; }
-:host(.mobile) .row { padding: 11px 12px; }
+:host(.mobile) .row { padding: 11px 12px; flex-wrap: wrap; }
+:host(.mobile) .who { flex-basis: 55%; }
 :host(.mobile) input[type="checkbox"] { width: 20px; height: 20px; }
 :host(.mobile) .tile { padding: 12px 10px; }
 :host(.mobile) .head { padding: 12px 14px; }
@@ -192,6 +202,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const num = (v) => Number(v || 0).toLocaleString('en-US');
   const plural = (n, w) => (n === 1 ? w : w + 's');
   const pct = (a, b) => (b ? Math.round((100 * a) / b) + '%' : '0%');
+  const USERNAME = /^[a-z0-9._]{1,30}$/;
 
   // One account as Instagram's list endpoints describe it.
   function normalizeUser(u) {
@@ -203,6 +214,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       id: u.pk != null ? String(u.pk) : u.pk_id != null ? String(u.pk_id) : '',
       name: typeof u.full_name === 'string' ? u.full_name : '',
       priv: !!u.is_private,
+      ver: !!u.is_verified,
+      pic: typeof u.profile_pic_url === 'string' && /^https:\/\//.test(u.profile_pic_url) ? u.profile_pic_url : '',
     };
   }
 
@@ -280,7 +293,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     let first = seg[0];
     try { first = decodeURIComponent(first); } catch (e) { /* keep as is */ }
     first = first.toLowerCase();
-    if (RESERVED.has(first) || !/^[a-z0-9._]{1,30}$/.test(first)) return '';
+    if (RESERVED.has(first) || !USERNAME.test(first)) return '';
     return first;
   }
 
@@ -291,7 +304,54 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     return { key: 'pillNot', tone: 'warn' };
   }
 
-  return { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel };
+  // Usernames out of pasted text or an imported file: plain lists (any separators, with or
+  // without @), a JSON array of names or of objects with a username, or an object holding such
+  // an array under any key. Lowercased, validated, deduplicated, in first-seen order.
+  function parseUsernames(input) {
+    const out = [];
+    const seen = new Set();
+    const push = (v) => {
+      if (typeof v !== 'string') return;
+      const u = v.trim().replace(/^@/, '').toLowerCase();
+      if (USERNAME.test(u) && !seen.has(u)) { seen.add(u); out.push(u); }
+    };
+    const walk = (v, depth) => {
+      if (depth > 4 || v == null) return;
+      if (typeof v === 'string') { push(v); return; }
+      if (Array.isArray(v)) { v.forEach((x) => walk(x, depth + 1)); return; }
+      if (typeof v === 'object') {
+        if (typeof v.username === 'string') { push(v.username); return; }
+        if (typeof v.u === 'string') { push(v.u); return; }
+        Object.values(v).forEach((x) => walk(x, depth + 1));
+      }
+    };
+    const text = String(input || '');
+    const trimmed = text.trim();
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try { walk(JSON.parse(trimmed), 0); return out; } catch (e) { /* not JSON after all */ }
+    }
+    for (const token of text.split(/[\s,;]+/)) push(token);
+    return out;
+  }
+
+  // Rows of cells to CSV text (RFC 4180 quoting, CRLF lines).
+  function toCsv(rows) {
+    const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    return rows.map((cells) => cells.map(esc).join(',')).join('\r\n');
+  }
+
+  // Account filters for the lists.
+  function matchesKind(rec, kind) {
+    switch (kind) {
+      case 'verified': return !!rec.ver;
+      case 'notVerified': return !rec.ver;
+      case 'private': return !!rec.priv;
+      case 'public': return !rec.priv;
+      default: return true;
+    }
+  }
+
+  return { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind };
 });
 
 ;
@@ -418,6 +478,33 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     partialFollowing: 'you follow',
     partialFollowers: 'following you',
     progVerify: 'Double-checking {n} of {total}…',
+    ledgerLive: 'Fetching… {nf} you follow, {nw} follow you',
+    protect: 'Protect',
+    protectedLabel: 'Protected',
+    protectTitle: 'Protected accounts stay out of “don’t follow you back”.',
+    protectedBtn: 'Protected ({n})',
+    protectedTitle: 'Protected accounts. They never show under “don’t follow you back”.',
+    protectedHint: 'Accounts you follow on purpose even if they don’t follow back: friends, brands, news. Paste usernames below, one per line or separated by spaces or commas.',
+    protectedPlaceholder: '@username another.name …',
+    protectedEmpty: 'No protected accounts yet. Tap Protect on any row, or paste usernames above.',
+    allProtected: 'Everyone left here is protected. Tick “Show protected” to see them.',
+    showProtected: 'Show protected',
+    nProtected: '{n} protected',
+    add: 'Add',
+    importBtn: 'Import file',
+    exportBtn: 'Export JSON',
+    remove: 'Remove',
+    kindAll: 'All accounts',
+    kindVerified: 'Verified only',
+    kindNotVerified: 'Not verified',
+    kindPrivate: 'Private only',
+    kindPublic: 'Public only',
+    verifiedTag: 'verified',
+    download: 'Download CSV',
+    toastSaved: 'Saved {name}',
+    toastSaveFailed: 'Could not save the file.',
+    toastAdded: 'Added {n}',
+    toastNothingToAdd: 'No usernames found.',
   };
 
   const ar = {
@@ -534,6 +621,33 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     partialFollowing: 'بتتابعهم',
     partialFollowers: 'بيتابعوك',
     progVerify: 'بنتأكد من {n} من {total}…',
+    ledgerLive: 'بنجيب… بتتابع {nf}، بيتابعك {nw}',
+    protect: 'احمي',
+    protectedLabel: 'محمي',
+    protectTitle: 'الحسابات المحمية مش بتظهر في "مش بيردوا المتابعة".',
+    protectedBtn: 'المحمية ({n})',
+    protectedTitle: 'الحسابات المحمية. مش بتظهر أبداً في "مش بيردوا المتابعة".',
+    protectedHint: 'حسابات بتتابعها عن قصد حتى لو مش بتردلك المتابعة: أصحاب، براندات، أخبار. الزق الأسماء تحت، كل اسم في سطر أو مفصولين بمسافة أو فاصلة.',
+    protectedPlaceholder: '@username اسم.تاني …',
+    protectedEmpty: 'مفيش حسابات محمية لسه. دوس "احمي" جنب أي اسم، أو الزق أسماء فوق.',
+    allProtected: 'كل اللي هنا محميين. علّم "اعرض المحمية" علشان تشوفهم.',
+    showProtected: 'اعرض المحمية',
+    nProtected: '{n} محمي',
+    add: 'أضف',
+    importBtn: 'استيراد ملف',
+    exportBtn: 'تصدير JSON',
+    remove: 'شيل',
+    kindAll: 'كل الحسابات',
+    kindVerified: 'الموثقة بس',
+    kindNotVerified: 'غير الموثقة',
+    kindPrivate: 'الخاصة بس',
+    kindPublic: 'العامة بس',
+    verifiedTag: 'موثق',
+    download: 'تحميل CSV',
+    toastSaved: 'اتحفظ {name}',
+    toastSaveFailed: 'مقدرناش نحفظ الملف.',
+    toastAdded: 'اتضاف {n}',
+    toastNothingToAdd: 'مفيش أسماء مستخدمين.',
   };
 
   return { en, ar };
@@ -557,7 +671,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -573,7 +687,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     friendship: (id) => `/api/v1/friendships/show/${id}/`,
   };
   // Pause between page requests, and the back-off when Instagram answers "wait a few minutes".
-  const PACE = { minDelayMs: 1200, jitterMs: 1600, rateLimitWaitMs: 90000, rateLimitRetries: 2 };
+  const PACE = { minDelayMs: 1200, jitterMs: 1600, rateLimitWaitMs: 90000, rateLimitRetries: 2, longPauseEvery: 15, longPauseMs: 10000 };
   // How many "follow you, not followed back" accounts are double-checked one by one after a check.
   const VERIFY_MAX = 20;
 
@@ -676,6 +790,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const acctStoreKey = (uid) => 'fbc.acct.' + uid;
   const doneStoreKey = (uid) => 'fbc.done.' + uid;
   const histStoreKey = (uid) => 'fbc.hist.' + uid;
+  const whiteStoreKey = (uid) => 'fbc.white.' + uid;
   const HIST_CAPS = { points: 400, events: 3000 };
 
   // --- Instagram requests
@@ -705,7 +820,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   async function fetchList(kind, userId, onProgress, ctl, opts) {
     const o = opts || {};
     const out = new Map();
-    let maxId = '', retries = 0, dupes = 0;
+    let maxId = '', retries = 0, dupes = 0, requests = 0;
     for (;;) {
       if (ctl.cancelled) throw new Cancelled();
       let j;
@@ -728,7 +843,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       onProgress(out.size, null);
       maxId = j.next_max_id != null && j.next_max_id !== '' ? String(j.next_max_id) : '';
       if (!maxId || users.length === 0) break;
-      await sleep(PACE.minDelayMs + Math.random() * PACE.jitterMs, ctl);
+      requests++;
+      // A longer pause every few pages keeps big accounts gentle on Instagram's limits.
+      const extra = requests % PACE.longPauseEvery === 0 ? PACE.longPauseMs : 0;
+      await sleep(extra + PACE.minDelayMs + Math.random() * PACE.jitterMs, ctl);
     }
     return { users: out, dupes };
   }
@@ -826,7 +944,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     mutual: { label: 'tileMutual', title: 'titleMutual', empty: 'emptyMutual' },
     changes: { label: 'tileHistory', title: 'titleHistory', empty: '' },
   };
-  const state = { uid: '', snap: null, prev: null, done: {}, lists: null, hist: null, evFilter: 'all', tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0 };
+  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, lists: null, hist: null, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0 };
+  const live = { following: 0, followers: 0 };
   const ui = {};
   // Small preferences, remembered across visits: language, panel width, and the pause after Instagram asks us to slow down.
   const UI_KEY = 'fbc.ui';
@@ -901,16 +1020,33 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.hideDone = h('input', { type: 'checkbox', onchange: () => { state.hideDone = ui.hideDone.checked; renderList(); } });
     ui.hideDoneText = h('span');
     ui.hideDoneWrap = h('label', { class: 'chk' }, ui.hideDone, ui.hideDoneText);
+    ui.showProtected = h('input', { type: 'checkbox', onchange: () => { state.showProtected = ui.showProtected.checked; renderList(); } });
+    ui.showProtectedText = h('span');
+    ui.showProtectedWrap = h('label', { class: 'chk', hidden: true }, ui.showProtected, ui.showProtectedText);
+    ui.kindOpts = ['all', 'verified', 'notVerified', 'private', 'public'].map((v) => h('option', { value: v }));
+    ui.kindFilter = h('select', { class: 'field sel', onchange: () => { state.kind = ui.kindFilter.value; renderList(); } }, ui.kindOpts);
     ui.filterOpts = ['all', 'others', 'gained', 'lost', 'you_followed', 'you_unfollowed'].map((v) => h('option', { value: v }));
     ui.evFilter = h('select', { class: 'field sel', hidden: true, onchange: () => { state.evFilter = ui.evFilter.value; renderList(); } }, ui.filterOpts);
     ui.copy = h('button', { class: 'btn small', type: 'button', onclick: () => copyList() });
-    ui.toolbar = h('div', { class: 'toolbar' }, ui.search, ui.hideDoneWrap, ui.evFilter, ui.copy);
+    ui.download = h('button', { class: 'btn small', type: 'button', onclick: () => downloadCurrent() });
+    ui.protectedBtn = h('button', { class: 'btn small', type: 'button', onclick: () => { state.tab = 'protected'; renderList(); } });
+    ui.toolbar = h('div', { class: 'toolbar' }, ui.search, ui.hideDoneWrap, ui.showProtectedWrap, ui.kindFilter, ui.evFilter, ui.copy, ui.download, ui.protectedBtn);
     ui.listTitle = h('div', { class: 'listtitle' });
     ui.chart = h('div', { class: 'charthost', hidden: true });
+    // Protected accounts: paste, import, export, and the list itself.
+    ui.protHint = h('div', { class: 'hint' });
+    ui.protText = h('textarea', { class: 'field area', rows: '3', spellcheck: 'false' });
+    ui.protAdd = h('button', { class: 'btn small primary', type: 'button', onclick: () => addProtectedFromText() });
+    ui.protFile = h('input', { type: 'file', accept: '.json,.txt,.csv,application/json,text/plain,text/csv', hidden: true, onchange: () => importProtectedFile() });
+    ui.protImport = h('button', { class: 'btn small', type: 'button', onclick: () => ui.protFile.click() });
+    ui.protExport = h('button', { class: 'btn small', type: 'button', onclick: () => exportProtected() });
+    ui.protList = h('div', { class: 'list' });
+    ui.protEmpty = h('div', { class: 'empty', hidden: true });
+    ui.prot = h('div', { class: 'prot', hidden: true }, ui.protHint, ui.protText, h('div', { class: 'toolbar' }, ui.protAdd, ui.protImport, ui.protExport, ui.protFile), ui.protList, ui.protEmpty);
     ui.list = h('div', { class: 'list' });
     ui.empty = h('div', { class: 'empty', hidden: true });
     ui.notice = h('div', { class: 'notice', hidden: true });
-    ui.results = h('div', { class: 'results', hidden: true }, ui.ledger, ui.notice, ui.tiles, ui.toolbar, ui.listTitle, ui.chart, ui.list);
+    ui.results = h('div', { class: 'results', hidden: true }, ui.ledger, ui.notice, ui.tiles, ui.toolbar, ui.listTitle, ui.chart, ui.prot, ui.list);
     ui.toast = h('div', { class: 'toast', role: 'status', hidden: true });
     ui.grip = h('div', { class: 'grip' });
     ui.foot = h('footer', { class: 'foot' });
@@ -954,10 +1090,21 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     const optKeys = ['filterAll', 'filterOthers', 'filterGained', 'filterLost', 'filterYouFollowed', 'filterYouUnfollowed'];
     ui.filterOpts.forEach((o, i) => { o.textContent = t(optKeys[i]); });
     for (const k of Object.keys(TABS)) ui.tile[k].label.textContent = t(TABS[k].label);
+    ui.showProtectedText.textContent = t('showProtected');
+    const kindKeys = ['kindAll', 'kindVerified', 'kindNotVerified', 'kindPrivate', 'kindPublic'];
+    ui.kindOpts.forEach((o, i) => { o.textContent = t(kindKeys[i]); });
+    ui.download.textContent = t('download');
+    ui.protAdd.textContent = t('add');
+    ui.protImport.textContent = t('importBtn');
+    ui.protExport.textContent = t('exportBtn');
+    ui.protText.placeholder = t('protectedPlaceholder');
+    ui.protHint.textContent = t('protectedHint');
+    updateProtectedBtn();
     ui.foot.textContent = t('footer');
     ui.grip.title = t('gripTitle');
     ui.rel.title = t('pillTitle');
   }
+  function updateProtectedBtn() { ui.protectedBtn.textContent = t('protectedBtn', { n: num(Object.keys(state.white).length) }); }
   function setLang(l, silent) {
     lang = l;
     if (!silent) saveUi();
@@ -1001,10 +1148,14 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.progress.hidden = false;
     let text;
     if (p.wait != null) text = t('progSlow', { s: p.wait });
-    else if (p.phase === 'info') text = t('progInfo');
+    else if (p.phase === 'info') { text = t('progInfo'); live.following = 0; live.followers = 0; }
     else if (p.phase === 'verify') text = t('progVerify', { n: num(p.n), total: num(p.total) });
     else text = t('progFetch', { phase: t(p.phase === 'followers' ? 'phaseFollowers' : 'phaseFollowing'), n: num(p.n), of: p.total ? t('progOf', { total: num(p.total) }) : '' });
     ui.ptext.textContent = text;
+    if (p.phase === 'following' || p.phase === 'followers') {
+      live[p.phase] = p.n || 0;
+      ui.ledger.textContent = t('ledgerLive', { nf: num(live.following), nw: num(live.followers) }); // counts up while the check runs
+    }
     const frac = p.total ? Math.min(1, (p.n || 0) / p.total) : 0;
     let width = 0.02;
     if (p.phase === 'following') width = frac * 0.45;
@@ -1041,8 +1192,16 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     if (partial && partial.followers) notes.push(t('partialWarn', { got: num(partial.followers.got), total: num(partial.followers.total), what: t('partialFollowers') }));
     ui.notice.textContent = notes.join(' ');
     ui.notice.hidden = notes.length === 0;
+    applyTiles();
+    renderList();
+  }
+  function applyTiles() {
     const L = state.lists;
-    setTile('notback', num(L.notback.length), t('subOfFollowing', { pct: pct(L.notback.length, nf) }));
+    if (!L || !state.snap) return;
+    const nf = state.snap.following.length, nw = state.snap.followers.length;
+    const protectedN = L.notback.filter((r) => isProtected(r.u)).length;
+    const shown = L.notback.length - protectedN;
+    setTile('notback', num(shown), t('subOfFollowing', { pct: pct(shown, nf) }) + (protectedN ? ' · ' + t('nProtected', { n: num(protectedN) }) : ''));
     setTile('fans', num(L.fans.length), t('subOfFollowers', { pct: pct(L.fans.length, nw) }));
     setTile('mutual', num(L.mutual.length), t('subOfFollowing', { pct: pct(L.mutual.length, nf) }));
     const pts = state.hist && Array.isArray(state.hist.points) ? state.hist.points : [];
@@ -1050,7 +1209,6 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     const g = groupEvents(state.hist && Array.isArray(state.hist.events) ? state.hist.events : []).find((x) => x.at === lastAt);
     if (pts.length >= 2) setTile('changes', `+${num(g ? g.gained : 0)} / −${num(g ? g.lost : 0)}`, t('subHistory'), true);
     else setTile('changes', '—', t('subHistoryNone'));
-    renderList();
   }
   function visible(rows) {
     const q = state.q.trim().toLowerCase().replace(/^@/, '');
@@ -1063,6 +1221,98 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     if (v) state.done[doneKey(u)] = 1; else delete state.done[doneKey(u)];
     if (state.uid) storageSet({ [doneStoreKey(state.uid)]: state.done });
   }
+  // Protected accounts: followed on purpose, kept out of "don't follow you back".
+  const isProtected = (u) => !!state.white[u];
+  function saveWhite() {
+    if (state.uid) storageSet({ [whiteStoreKey(state.uid)]: state.white });
+    updateProtectedBtn();
+  }
+  function setProtected(u, v) {
+    if (v) state.white[u] = 1; else delete state.white[u];
+    saveWhite();
+  }
+  function addProtected(names) {
+    let added = 0;
+    for (const u of names) if (!state.white[u]) { state.white[u] = 1; added++; }
+    saveWhite();
+    toast(added ? t('toastAdded', { n: num(added) }) : t('toastNothingToAdd'));
+    applyTiles();
+    renderList();
+  }
+  function addProtectedFromText() {
+    const names = parseUsernames(ui.protText.value);
+    if (!names.length) { toast(t('toastNothingToAdd')); return; }
+    ui.protText.value = '';
+    addProtected(names);
+  }
+  function importProtectedFile() {
+    const f = ui.protFile.files && ui.protFile.files[0];
+    ui.protFile.value = '';
+    if (!f) return;
+    f.text().then((text) => addProtected(parseUsernames(text)), () => toast(t('toastNothingToAdd')));
+  }
+  function exportProtected() {
+    const names = Object.keys(state.white).sort();
+    if (!names.length) { toast(t('toastNothing')); return; }
+    downloadText('follow-check-protected.json', 'application/json', JSON.stringify({ protected: names }, null, 2));
+  }
+  function lookupRecord(u) {
+    const s = state.snap;
+    if (!s) return null;
+    return s.following.find((r) => r.u === u) || s.followers.find((r) => r.u === u) || null;
+  }
+  // Saves a text file: through the Android app when it hosts the page, otherwise as a browser download.
+  function downloadText(name, mime, text) {
+    try {
+      const bridge = window.FollowCheckHost;
+      if (bridge && typeof bridge.saveText === 'function') {
+        const ok = bridge.saveText(name, mime, text);
+        toast(ok ? t('toastSaved', { name }) : t('toastSaveFailed'));
+        return;
+      }
+    } catch (e) { /* fall through to the browser download */ }
+    try {
+      const blob = new Blob([text], { type: mime + ';charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = h('a', { href: url, download: name });
+      root.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast(t('toastSaved', { name }));
+    } catch (e) {
+      toast(t('toastSaveFailed'));
+    }
+  }
+  function downloadCurrent() {
+    if (!state.lists) return;
+    const profile = (u) => 'https://www.instagram.com/' + u + '/';
+    if (state.tab === 'protected') { exportProtected(); return; }
+    let rows, name;
+    if (state.tab === 'changes') {
+      const evs = filteredEvents();
+      if (!evs.length) { toast(t('toastNothing')); return; }
+      rows = [['date', 'event', 'username', 'name', 'profile']].concat(evs.map((e) => [new Date(e.at).toISOString(), e.type, e.u, e.name || '', profile(e.u)]));
+      name = 'follow-check-history.csv';
+    } else {
+      const list = listRows();
+      if (!list.length) { toast(t('toastNothing')); return; }
+      const yes = (v) => (v ? 'yes' : 'no');
+      rows = [['username', 'name', 'private', 'verified', 'protected', 'handled', 'profile']]
+        .concat(list.map((r) => [r.u, r.name || '', yes(r.priv), yes(r.ver), yes(isProtected(r.u)), yes(isDone(r.u)), profile(r.u)]));
+      name = 'follow-check-' + state.tab + '.csv';
+    }
+    downloadText(name, 'text/csv', '﻿' + toCsv(rows));
+  }
+  function avatarNode(r) {
+    if (r.pic) {
+      const img = h('img', { class: 'avatar', src: r.pic, alt: '', loading: 'lazy' });
+      // Instagram's picture links expire after a while; fall back to the first letter.
+      img.addEventListener('error', () => img.replaceWith(h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase())));
+      return img;
+    }
+    return h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase());
+  }
   function rowNode(r, withCheck) {
     const row = h('div', { class: 'row' + (withCheck && isDone(r.u) ? ' done' : '') });
     if (withCheck) {
@@ -1074,10 +1324,25 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       });
       row.append(h('label', { class: 'chk' }, cb));
     }
+    row.append(avatarNode(r));
     row.append(h('div', { class: 'who' },
       h('a', { class: 'handle', href: 'https://www.instagram.com/' + encodeURIComponent(r.u) + '/', target: '_blank', rel: 'noopener noreferrer' }, '@' + r.u, h('span', { class: 'arrow' }, '↗')),
       r.name ? h('div', { class: 'name', title: r.name }, r.name) : null));
+    if (r.ver) row.append(h('span', { class: 'tag ver' }, t('verifiedTag')));
     if (r.priv) row.append(h('span', { class: 'tag' }, t('privateTag')));
+    if (withCheck) {
+      const on = isProtected(r.u);
+      const pb = h('button', { class: 'protect' + (on ? ' on' : ''), type: 'button', title: t('protectTitle') }, on ? t('protectedLabel') : t('protect'));
+      pb.addEventListener('click', () => {
+        const now = !isProtected(r.u);
+        setProtected(r.u, now);
+        pb.classList.toggle('on', now);
+        pb.textContent = now ? t('protectedLabel') : t('protect');
+        applyTiles();
+        if (state.tab === 'notback' && now && !state.showProtected) { row.remove(); if (!ui.list.children.length) renderList(); }
+      });
+      row.append(pb);
+    }
     if (withCheck) {
       // The lists come from the last check; this asks Instagram about this one account right now.
       const vb = h('button', { class: 'verify', type: 'button', title: t('verifyTitle') }, t('verify'));
@@ -1111,29 +1376,59 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       btn.disabled = false;
     }
   }
+  // The rows of the current list tab after every filter: search, protected, handled, account kind.
+  function listRows() {
+    let rows = visible(state.lists[state.tab]);
+    if (state.tab === 'notback' && !state.showProtected) rows = rows.filter((r) => !isProtected(r.u));
+    if (state.hideDone) rows = rows.filter((r) => !isDone(r.u));
+    if (state.kind !== 'all') rows = rows.filter((r) => matchesKind(r, state.kind));
+    return rows.slice().sort((a, b) => (a.u < b.u ? -1 : a.u > b.u ? 1 : 0));
+  }
+  function renderProtected() {
+    ui.listTitle.textContent = t('protectedTitle');
+    const names = Object.keys(state.white).sort();
+    ui.protList.replaceChildren();
+    for (const u of names) {
+      const row = rowNode(lookupRecord(u) || { u, name: '', priv: false, ver: false, pic: '' }, false);
+      row.append(h('button', { class: 'verify', type: 'button', onclick: () => { setProtected(u, false); applyTiles(); renderList(); } }, t('remove')));
+      ui.protList.append(row);
+    }
+    ui.protList.hidden = names.length === 0;
+    ui.protEmpty.hidden = names.length !== 0;
+    ui.protEmpty.textContent = t('protectedEmpty');
+  }
   function renderList() {
     for (const el of ui.tiles.children) el.setAttribute('aria-selected', String(el.dataset.tab === state.tab));
     ui.list.replaceChildren();
     if (!state.lists) return;
-    const history = state.tab === 'changes';
+    const history = state.tab === 'changes', prot = state.tab === 'protected';
     ui.chart.hidden = !history;
     ui.evFilter.hidden = !history;
-    ui.hideDoneWrap.hidden = history;
+    ui.hideDoneWrap.hidden = history || prot;
+    ui.kindFilter.hidden = history || prot;
+    ui.showProtectedWrap.hidden = state.tab !== 'notback';
+    ui.prot.hidden = !prot;
+    ui.list.hidden = prot;
+    ui.empty.hidden = true;
+    if (prot) { renderProtected(); return; }
     if (history) { renderHistory(); return; }
     const all = state.lists[state.tab];
-    let rows = visible(all);
-    if (state.hideDone) rows = rows.filter((r) => !isDone(r.u));
-    rows = rows.slice().sort((a, b) => (a.u < b.u ? -1 : a.u > b.u ? 1 : 0));
+    const base = state.tab === 'notback' ? all.filter((r) => !isProtected(r.u)) : all;
+    const rows = listRows();
     const handled = all.filter((r) => isDone(r.u)).length;
-    ui.listTitle.textContent = t(TABS[state.tab].title, { n: num(all.length), nRaw: all.length })
-      + (rows.length !== all.length ? ' · ' + t('showing', { n: num(rows.length) }) : '')
-      + (handled ? ' · ' + t('handled', { n: num(handled) }) : '');
+    const protectedN = all.length - base.length;
+    ui.listTitle.textContent = t(TABS[state.tab].title, { n: num(base.length), nRaw: base.length })
+      + (rows.length !== base.length ? ' · ' + t('showing', { n: num(rows.length) }) : '')
+      + (handled ? ' · ' + t('handled', { n: num(handled) }) : '')
+      + (protectedN ? ' · ' + t('nProtected', { n: num(protectedN) }) : '');
     for (const r of rows) ui.list.append(rowNode(r, true));
     ui.list.hidden = rows.length === 0;
     ui.empty.hidden = rows.length !== 0;
     if (!rows.length) {
       ui.empty.textContent = all.length === 0 ? t(TABS[state.tab].empty)
         : state.q.trim() ? t('noMatch', { q: state.q.trim() })
+        : state.kind !== 'all' ? t('histEmptyFilter')
+        : (state.tab === 'notback' && base.length === 0) ? t('allProtected')
         : t('allHandled');
     }
   }
@@ -1267,9 +1562,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   function currentUsernames() {
     if (!state.lists) return [];
     if (state.tab === 'changes') return [...new Set(filteredEvents().map((e) => e.u))];
-    let rows = visible(state.lists[state.tab]);
-    if (state.hideDone) rows = rows.filter((r) => !isDone(r.u));
-    return rows.map((r) => r.u).sort();
+    if (state.tab === 'protected') return Object.keys(state.white).sort();
+    return listRows().map((r) => r.u);
   }
   function copyList() {
     const names = currentUsernames();
@@ -1348,11 +1642,12 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   async function loadAccount(uid) {
     const seq = ++loadSeq;
     state.uid = uid;
-    state.snap = null; state.prev = null; state.done = {}; state.lists = null; state.hist = null;
+    state.snap = null; state.prev = null; state.done = {}; state.white = {}; state.lists = null; state.hist = null;
     state.tab = 'notback';
+    updateProtectedBtn();
     applySnapshot();
     if (!uid) return;
-    const r = await storageGet([acctStoreKey(uid), doneStoreKey(uid), histStoreKey(uid), 'fbc', 'fbcDone']);
+    const r = await storageGet([acctStoreKey(uid), doneStoreKey(uid), histStoreKey(uid), whiteStoreKey(uid), 'fbc', 'fbcDone']);
     if (seq !== loadSeq) return; // another account took over while loading
     let acct = r[acctStoreKey(uid)];
     let done = r[doneStoreKey(uid)];
@@ -1364,6 +1659,9 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     state.snap = acct && isSnap(acct.last) ? acct.last : null;
     state.prev = acct && isSnap(acct.prev) ? acct.prev : null;
     state.done = done && typeof done === 'object' ? done : {};
+    const white = r[whiteStoreKey(uid)];
+    state.white = white && typeof white === 'object' && !Array.isArray(white) ? white : {};
+    updateProtectedBtn();
     const hist = r[histStoreKey(uid)];
     if (hist && Array.isArray(hist.points) && Array.isArray(hist.events)) {
       state.hist = hist;

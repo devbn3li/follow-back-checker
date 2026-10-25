@@ -120,6 +120,15 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .chip.good { color: var(--good); border-color: var(--good); }
 .chip.warn { color: var(--warn); border-color: var(--warn); }
 .chip.live { color: var(--fg); border-color: var(--accent); }
+.avatar { flex: none; width: 28px; height: 28px; border-radius: 50%; object-fit: cover; background: var(--bg2); }
+.avatar.ph { display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--muted); }
+.tag.ver { color: var(--accent); border-color: var(--accent); }
+.protect { flex: none; background: none; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted); padding: 2px 7px; cursor: pointer; white-space: nowrap; }
+.protect:hover { border-color: var(--accent); color: var(--fg); }
+.protect.on { background: var(--accent-soft); border-color: var(--accent); color: var(--fg); }
+.prot { display: grid; gap: 10px; }
+.hint { font-size: 12.5px; color: var(--muted); }
+.field.area { width: 100%; min-height: 64px; resize: vertical; font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; font-size: 13px; direction: ltr; }
 .verify { flex: none; background: none; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted); padding: 2px 7px; cursor: pointer; white-space: nowrap; }
 .verify:hover { border-color: var(--accent); color: var(--fg); }
 .verify:disabled { opacity: 0.6; cursor: progress; }
@@ -157,7 +166,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 :host(.mobile) .drawer { width: 100vw; }
 :host(.mobile) .btn { padding: 11px 16px; }
 :host(.mobile) .btn.small { padding: 8px 12px; }
-:host(.mobile) .row { padding: 11px 12px; }
+:host(.mobile) .row { padding: 11px 12px; flex-wrap: wrap; }
+:host(.mobile) .who { flex-basis: 55%; }
 :host(.mobile) input[type="checkbox"] { width: 20px; height: 20px; }
 :host(.mobile) .tile { padding: 12px 10px; }
 :host(.mobile) .head { padding: 12px 14px; }
