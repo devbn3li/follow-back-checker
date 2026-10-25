@@ -300,3 +300,19 @@ test('shortNum, followBackOdds, sortRows and pruneCounts', () => {
   assert.deepEqual(Object.keys(pruned), ['x', 'y'], 'stale and junk dropped, newest kept up to the cap');
   assert.deepEqual(core.pruneCounts(null, now, 5, day), {});
 });
+
+test('loopsFrom finds accounts you unfollowed and then followed again', () => {
+  const ev = (at, type, u) => ({ at, type, u, name: '', priv: false });
+  const loops = core.loopsFrom([
+    ev(5, 'you_followed', 'a'), ev(1, 'you_unfollowed', 'a'),           // out of order on purpose
+    ev(2, 'you_unfollowed', 'b'),                                        // never followed again
+    ev(3, 'you_followed', 'c'),                                          // followed without an unfollow before
+    ev(4, 'you_unfollowed', 'd'), ev(6, 'you_followed', 'd'), ev(7, 'you_unfollowed', 'd'), // looped, then unfollowed again
+    ev(8, 'lost', 'a'), null, { type: 'you_followed' },
+  ]);
+  assert.deepEqual(loops.get('a'), { unfollowedAt: 1, followedAt: 5 });
+  assert.equal(loops.has('b'), false);
+  assert.equal(loops.has('c'), false);
+  assert.equal(loops.has('d'), false, 'an unfollow after the loop clears the flag until the next follow');
+  assert.equal(core.loopsFrom(null).size, 0);
+});

@@ -1,4 +1,4 @@
-/* Follow Back Checker 1.9.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+/* Follow Back Checker 1.10.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
 // Panel styles. Injected into a shadow root by content.js, so Instagram's own CSS cannot leak in
 // and a strict page CSP cannot block them (they go in through a constructed stylesheet).
 var FBC_CSS = `
@@ -399,6 +399,17 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     return null;
   }
 
+  // Accounts you unfollowed and later followed again: username -> { unfollowedAt, followedAt } of the
+  // latest such pair, from the history events (which cover both the panel's actions and what a check noticed).
+  function loopsFrom(events) {
+    const sorted = (events || []).filter((e) => e && typeof e.u === 'string' && typeof e.at === 'number').slice().sort((a, b) => a.at - b.at);
+    const lastUnfollow = new Map(), out = new Map();
+    for (const e of sorted) {
+      if (e.type === 'you_unfollowed') { lastUnfollow.set(e.u, e.at); out.delete(e.u); }
+      else if (e.type === 'you_followed' && lastUnfollow.has(e.u)) { out.set(e.u, { unfollowedAt: lastUnfollow.get(e.u), followedAt: e.at }); lastUnfollow.delete(e.u); }
+    }
+    return out;
+  }
   // Who unfollowed you and when (the latest time), from the history events.
   function lostSince(events) {
     const m = new Map();
@@ -566,7 +577,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     return out;
   }
 
-  return { carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
+  return { loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
 });
 
 ;
@@ -803,6 +814,9 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     leftBackChip: 'unfollowed you {d}, back now',
     nLeftBefore: '{n} unfollowed you before',
     pillLeft: 'unfollowed you {d}',
+    loopChip: 'you unfollowed, then followed again {d}',
+    nLoop: '{n} followed again after an unfollow',
+    pillLoop: 'you unfollowed and followed again {d}',
     loadCounts: 'Load counts',
     loadCountsTitle: 'Fetches followers and following of each account shown, one request per account, paced. Up to {n} per tap; tap again to stop.',
     loadingCounts: 'Counts {a}/{b}, tap to stop',
@@ -1042,6 +1056,9 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     leftBackChip: 'سابك {d} ورجع',
     nLeftBefore: '{n} سابوك قبل كده',
     pillLeft: 'سابك {d}',
+    loopChip: 'ألغيت متابعته ورجعت تابعته {d}',
+    nLoop: '{n} رجعت تابعتهم بعد إلغاء',
+    pillLoop: 'ألغيت متابعته ورجعت تابعته {d}',
     loadCounts: 'هات الأرقام',
     loadCountsTitle: 'بيجيب عدد المتابعين والمتابَعين لكل حساب ظاهر، طلب لكل حساب، متباعد. لحد {n} في الضغطة، ودوس تاني علشان توقف.',
     loadingCounts: 'الأرقام {a}/{b}، دوس علشان توقف',
@@ -1078,7 +1095,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -1363,7 +1380,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     changes: { label: 'tileHistory', title: 'titleHistory', empty: '' },
   };
   const freshActions = () => ({ times: [], pausedUntil: 0, warned: false });
-  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0, countsPausedUntil: 0 };
+  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), loops: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0, countsPausedUntil: 0 };
   const live = { following: 0, followers: 0 };
   const ui = {};
   // Small preferences, remembered across visits: language, panel width, and the pause after Instagram asks us to slow down.
@@ -1966,7 +1983,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     const following = new Map(snap.following.map((r) => [r.u, r]));
     const followers = new Map(snap.followers.map((r) => [r.u, r]));
     state.lists = derive(following, followers);
-    state.left = lostSince(state.hist && Array.isArray(state.hist.events) ? state.hist.events : []);
+    refreshFlags();
     ui.results.hidden = false;
     const nf = following.size, nw = followers.size;
     ui.ledger.textContent = t('ledger', { nf: num(nf), nfRaw: nf, nw: num(nw), nwRaw: nw });
@@ -1986,8 +2003,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     const protectedN = L.notback.filter((r) => isProtected(r.u)).length;
     const shown = L.notback.length - protectedN;
     const leftN = whoLeft(L.notback.filter((r) => !isProtected(r.u)), state.left).length;
+    const loopN = L.notback.filter((r) => !isProtected(r.u) && state.loops.has(r.u)).length;
     setTile('notback', num(shown), t('subOfFollowing', { pct: pct(shown, nf) })
       + (leftN ? ' · ' + t('nLeft', { n: num(leftN) }) : '')
+      + (loopN ? ' · ' + t('nLoop', { n: num(loopN) }) : '')
       + (protectedN ? ' · ' + t('nProtected', { n: num(protectedN) }) : ''));
     const fansLeft = L.fans.filter((r) => state.left.has(r.u)).length;
     setTile('fans', num(L.fans.length), t('subOfFollowers', { pct: pct(L.fans.length, nw) }) + (fansLeft ? ' · ' + t('nLeftBefore', { n: num(fansLeft) }) : ''));
@@ -2139,6 +2158,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       const stillFollowsYou = !!(state.snap && state.snap.followers.some((x) => x.u === r.u));
       row.append(h('span', { class: 'chip warn' }, t(stillFollowsYou ? 'leftBackChip' : 'leftChip', { d: fmtMD(state.left.get(r.u)) })));
     }
+    if (state.tab !== 'changes' && state.loops.has(r.u)) row.append(h('span', { class: 'chip' }, t('loopChip', { d: fmtMD(state.loops.get(r.u).followedAt) })));
     if (withCheck && state.tab === 'notback' && r.id) {
       // Two taps within four seconds: the first arms the button, the second unfollows.
       const ub = h('button', { class: 'unf', type: 'button', title: t('unfollowTitle') }, t('unfollow'));
@@ -2664,7 +2684,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     if (rel.self) { ui.rel.hidden = true; return; }
     const d = describeRel(rel);
     ui.relDot.classList.add(d.tone);
-    const left = state.left.has(username) ? ' · ' + t('pillLeft', { d: fmtMD(state.left.get(username)) }) : '';
+    const left = (state.left.has(username) ? ' · ' + t('pillLeft', { d: fmtMD(state.left.get(username)) }) : '')
+      + (state.loops.has(username) ? ' · ' + t('pillLoop', { d: fmtMD(state.loops.get(username).followedAt) }) : '');
     if (rel.stale) {
       ui.relText.textContent = t('pillAsOf', { text: t(d.key), when: fmtWhen(rel.stale) }) + left;
       if (!note) ui.rel.title = t('pillTitleLast');
@@ -2830,19 +2851,26 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     else snap.followers = snap.followers.filter((x) => x.u !== r.u);
     state.hist = appendHistory(state.hist, pointFrom(snap), [{ at: Date.now(), type: followsYou ? 'gained' : 'lost', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
     state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
-    state.left = lostSince(state.hist.events);
+    refreshFlags();
     if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
     applyTiles();
   }
   // Keeps the lists and the history honest after an unfollow, without another full check.
   // silent: Instagram said you already do not follow, so there is no event to record.
+  // The two per-account flags read off the history: who unfollowed you, and whom you followed again after an unfollow.
+  function refreshFlags() {
+    const events = state.hist && Array.isArray(state.hist.events) ? state.hist.events : [];
+    state.left = lostSince(events);
+    state.loops = loopsFrom(events);
+  }
   function recordUnfollow(r, silent) {
     const snap = state.snap;
     if (!snap) return;
     snap.following = snap.following.filter((x) => x.u !== r.u);
     state.hist = appendHistory(state.hist, pointFrom(snap), silent ? [] : [{ at: Date.now(), type: 'you_unfollowed', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
     state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
+    refreshFlags();
     if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
     applyTiles();
@@ -2877,6 +2905,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     snap.following.push({ u: r.u, id: r.id, name: r.name || '', priv: !!r.priv, ver: !!r.ver, pic: r.pic || '' });
     state.hist = appendHistory(state.hist, pointFrom(snap), silent ? [] : [{ at: Date.now(), type: 'you_followed', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
     state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
+    refreshFlags();
     if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
     applyTiles();

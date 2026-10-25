@@ -191,6 +191,17 @@
     return null;
   }
 
+  // Accounts you unfollowed and later followed again: username -> { unfollowedAt, followedAt } of the
+  // latest such pair, from the history events (which cover both the panel's actions and what a check noticed).
+  function loopsFrom(events) {
+    const sorted = (events || []).filter((e) => e && typeof e.u === 'string' && typeof e.at === 'number').slice().sort((a, b) => a.at - b.at);
+    const lastUnfollow = new Map(), out = new Map();
+    for (const e of sorted) {
+      if (e.type === 'you_unfollowed') { lastUnfollow.set(e.u, e.at); out.delete(e.u); }
+      else if (e.type === 'you_followed' && lastUnfollow.has(e.u)) { out.set(e.u, { unfollowedAt: lastUnfollow.get(e.u), followedAt: e.at }); lastUnfollow.delete(e.u); }
+    }
+    return out;
+  }
   // Who unfollowed you and when (the latest time), from the history events.
   function lostSince(events) {
     const m = new Map();
@@ -358,5 +369,5 @@
     return out;
   }
 
-  return { carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
+  return { loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats };
 });
