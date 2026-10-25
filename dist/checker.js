@@ -1,4 +1,5 @@
-/* Follow Back Checker 1.10.1. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+/* Follow Back Checker 1.11.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+if (typeof window !== 'undefined') window.FBC_VERSION = '1.11.0';
 // Panel styles. Injected into a shadow root by content.js, so Instagram's own CSS cannot leak in
 // and a strict page CSP cannot block them (they go in through a constructed stylesheet).
 var FBC_CSS = `
@@ -105,10 +106,12 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 
 .list { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .list > * + * { border-top: 1px solid var(--border); }
-.row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 8px 12px; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 10px; align-items: center; padding: 8px 12px; min-width: 0; }
 .row.done { opacity: 0.5; }
 .row.done .handle { text-decoration: line-through; }
-.who { flex: 1 1 160px; min-width: 140px; display: grid; gap: 1px; align-content: center; }
+.who { flex: 1 1 160px; min-width: 140px; display: grid; gap: 1px; align-content: center; justify-items: start; }
+.since { font-size: 11px; color: var(--muted); }
+.acts { display: inline-flex; align-items: center; gap: 6px; flex: none; margin-inline-start: auto; }
 .handle { flex: none; font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; font-size: 13.5px; font-weight: 500; color: var(--fg); text-decoration: none; overflow-wrap: anywhere; direction: ltr; unicode-bidi: isolate; }
 .handle:hover { color: var(--accent); text-decoration: underline; }
 .handle .arrow { color: var(--muted); font-size: 12px; margin-left: 4px; }
@@ -190,6 +193,13 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 @media (prefers-reduced-motion: reduce) { .pfill { transition: none; } .dot.loading { animation: none; } }
 
 /* Phones and the Android app: full-width panel, bigger targets, no resize grip. */
+.icon.gear { font-size: 18px; }
+.settings { margin: 0 16px 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; display: grid; gap: 8px; font-size: 13px; }
+.settings .stitle { font-weight: 600; }
+.settings .chk { color: var(--fg); align-items: flex-start; }
+.settings .chk input { margin-top: 2px; flex: none; }
+.update { margin: 0 16px 10px; padding: 10px 12px; border-radius: 8px; background: var(--accent-soft); color: var(--fg); font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.update .updtext { flex: 1 1 160px; }
 :host(.mobile) .fabwrap { right: 12px; bottom: 76px; max-width: calc(100vw - 24px); }
 :host(.mobile) .grip { display: none; }
 :host(.mobile) .drawer { width: 100vw; }
@@ -282,11 +292,20 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     const back = d.back || [];
     const returned = back.filter((r) => gone.has(r.u));
     const fresh = back.filter((r) => !gone.has(r.u));
+    // A known-away account that reappears in one list only came back (both follows restored) and then
+    // lost the other edge before this check: in following only, it unfollowed you; in followers only,
+    // you unfollowed it. Neither is an action of yours to file as "you followed" or "they followed".
+    const youFollowed = (d.youFollowed || []).filter((r) => !gone.has(r.u));
+    const gained = (d.gained || []).filter((r) => !gone.has(r.u));
+    const backThenLeft = (d.youFollowed || []).filter((r) => gone.has(r.u));
+    const backThenDropped = (d.gained || []).filter((r) => gone.has(r.u));
     return [
-      ...mk('gained', d.gained), ...mk('lost', d.lost),
-      ...mk('you_followed', d.youFollowed), ...mk('you_unfollowed', d.youUnfollowed),
+      ...mk('gained', gained), ...mk('lost', d.lost),
+      ...mk('you_followed', youFollowed), ...mk('you_unfollowed', d.youUnfollowed),
       ...mk('deactivated', d.gone), ...mk('reactivated', returned),
       ...mk('gained', fresh), ...mk('you_followed', fresh),
+      ...mk('reactivated', backThenLeft), ...mk('lost', backThenLeft),
+      ...mk('reactivated', backThenDropped), ...mk('you_unfollowed', backThenDropped),
     ];
   }
   // Well-formed events, oldest first. Stored histories are trusted, but a damaged entry must not break a load.
@@ -635,11 +654,14 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     if (ratio <= 1.5) return 'good';
     return 'mid';
   }
-  function sortRows(rows, mode, counts) {
+  // since: optional (username) -> { at } for the 'since' mode, which puts the longest-standing follow first.
+  function sortRows(rows, mode, counts, since) {
     const byName = (a, b) => (a.u < b.u ? -1 : a.u > b.u ? 1 : 0);
     const c = (r) => (counts && counts[r.u]) || null;
+    const UNKNOWN = -Number.MAX_SAFE_INTEGER; // no date at all: after every dated row
     const key = mode === 'followers' ? (r) => (c(r) ? c(r).fw : -1)
       : mode === 'ratio' ? (r) => (c(r) ? (c(r).fg === 0 ? Infinity : c(r).fw / c(r).fg) : -1)
+      : mode === 'since' ? (r) => { const s = typeof since === 'function' ? since(r.u) : null; return s && typeof s.at === 'number' ? -s.at : UNKNOWN; }
       : null;
     const out = rows.slice();
     if (!key) return out.sort(byName);
@@ -656,7 +678,173 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     return out;
   }
 
-  return { loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
+
+  // --- "following since": one date per account. Exact when it comes from Instagram's own export,
+  // approximate when a check noticed the change (then it is the check's date, at most one check gap late).
+  // dates = { following: { u: { at, x } }, followers: { u: { at, x } }, floor, importedAt }
+  // floor: the first check's date; an account that was already there then is "since before" it.
+  function emptyDates(floor) { return { following: {}, followers: {}, floor: floor || 0, importedAt: 0 }; }
+  function applyDateEvents(dates, events) {
+    const d = dates && typeof dates === 'object' ? dates : emptyDates(0);
+    const following = Object.assign({}, d.following || {}), followers = Object.assign({}, d.followers || {});
+    for (const e of validEvents(events)) {
+      if (e.type === 'you_followed') following[e.u] = { at: e.at, x: false };
+      else if (e.type === 'you_unfollowed') delete following[e.u];
+      else if (e.type === 'gained') followers[e.u] = { at: e.at, x: false };
+      else if (e.type === 'lost') delete followers[e.u];
+    }
+    return { following, followers, floor: d.floor || 0, importedAt: d.importedAt || 0 };
+  }
+  // Rows from the export ({ u, ts }) replace what the checks guessed; rows without a date are skipped.
+  function importDates(dates, rows, kind, now) {
+    const d = dates && typeof dates === 'object' ? dates : emptyDates(0);
+    const key = kind === 'followers' ? 'followers' : 'following';
+    const map = Object.assign({}, d[key] || {});
+    let added = 0;
+    for (const r of rows || []) {
+      if (!r || typeof r.u !== 'string' || typeof r.ts !== 'number' || !(r.ts > 0)) continue;
+      map[r.u] = { at: r.ts, x: true };
+      added++;
+    }
+    return { dates: Object.assign({}, d, { [key]: map, importedAt: added ? now : (d.importedAt || 0) }), added };
+  }
+  // What to show for one account: { at, exact, before }. before: it was already there at the first check.
+  function sinceOf(dates, list, u) {
+    if (!dates || typeof dates !== 'object') return null;
+    const m = dates[list === 'followers' ? 'followers' : 'following'] || {};
+    const e = m[u];
+    if (e && typeof e.at === 'number') return { at: e.at, exact: !!e.x, before: false };
+    if (typeof dates.floor === 'number' && dates.floor > 0) return { at: dates.floor, exact: false, before: true };
+    return null;
+  }
+  // Which list an export file holds: its name says so; otherwise whichever of your lists it overlaps most.
+  function guessListKind(name, rows, snap) {
+    const n = String(name || '').toLowerCase();
+    if (/following/.test(n)) return 'following';
+    if (/follower/.test(n)) return 'followers';
+    if (!snap || !Array.isArray(snap.following) || !Array.isArray(snap.followers)) return null;
+    const fg = new Set(snap.following.map((r) => r.u)), fw = new Set(snap.followers.map((r) => r.u));
+    let a = 0, b = 0;
+    for (const r of rows || []) { if (r && fg.has(r.u)) a++; if (r && fw.has(r.u)) b++; }
+    if (!a && !b) return null;
+    return a >= b ? 'following' : 'followers';
+  }
+  // The list files inside Instagram's export zip (connections/followers_and_following/).
+  const EXPORT_LIST = /(^|\/)(following|followers(_\d+)?)\.(json|html)$/i;
+  function exportListEntries(entries) {
+    return (entries || []).filter((e) => e && typeof e.name === 'string' && EXPORT_LIST.test(e.name) && !/(^|\/)__MACOSX\//.test(e.name));
+  }
+  // A zip is read from its end: the end record points at the central directory, which lists every entry
+  // and where its local header sits. Three small pieces, so a page can read a large export through
+  // File.slice without loading the media inside it. No ZIP64.
+  const u8 = (bytes) => (bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+  // tail: the last bytes of the file (up to 64 KB + 22). Offsets count from the start of the file.
+  function zipFindEocd(tail, fileSize) {
+    const b = u8(tail);
+    const n = b.length;
+    if (n < 22) return null;
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    for (let i = n - 22; i >= Math.max(0, n - 22 - 65535); i--) {
+      if (dv.getUint32(i, true) !== 0x06054b50) continue;
+      const out = { count: dv.getUint16(i + 10, true), cdSize: dv.getUint32(i + 12, true), cdOffset: dv.getUint32(i + 16, true) };
+      const total = typeof fileSize === 'number' ? fileSize : n;
+      return out.cdOffset + out.cdSize <= total ? out : null;
+    }
+    return null;
+  }
+  // cd: the central directory bytes. Returns [{ name, method, size, csize, lho }].
+  function zipCentral(cd, count) {
+    const b = u8(cd);
+    const n = b.length;
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    const utf8 = new TextDecoder('utf-8');
+    const out = [];
+    let p = 0;
+    for (let i = 0; i < count && p + 46 <= n; i++) {
+      if (dv.getUint32(p, true) !== 0x02014b50) break;
+      const nlen = dv.getUint16(p + 28, true), xlen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
+      if (p + 46 + nlen > n) break;
+      out.push({ name: utf8.decode(b.subarray(p + 46, p + 46 + nlen)), method: dv.getUint16(p + 10, true), csize: dv.getUint32(p + 20, true), size: dv.getUint32(p + 24, true), lho: dv.getUint32(p + 42, true) });
+      p += 46 + nlen + xlen + clen;
+    }
+    return out;
+  }
+  // lh: the 30 bytes of a local header. How far past the header's start the data begins, or -1.
+  function zipDataStart(lh) {
+    const b = u8(lh);
+    if (b.length < 30) return -1;
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    if (dv.getUint32(0, true) !== 0x04034b50) return -1;
+    return 30 + dv.getUint16(26, true) + dv.getUint16(28, true);
+  }
+  // The entries of a whole zip held in memory, with the raw bytes attached.
+  function zipEntries(bytes) {
+    const b = u8(bytes);
+    const e = zipFindEocd(b.subarray(Math.max(0, b.length - 65557)), b.length);
+    if (!e) return [];
+    const out = [];
+    for (const c of zipCentral(b.subarray(e.cdOffset, e.cdOffset + e.cdSize), e.count)) {
+      const at = zipDataStart(b.subarray(c.lho, c.lho + 30));
+      if (at < 0 || c.lho + at + c.csize > b.length) continue;
+      out.push(Object.assign({}, c, { data: b.subarray(c.lho + at, c.lho + at + c.csize) }));
+    }
+    return out;
+  }
+  // The text of one entry: stored ones as they are, deflated ones through the platform's decoder.
+  async function zipText(entry) {
+    if (!entry || !entry.data) return '';
+    if (entry.method === 0) return new TextDecoder('utf-8').decode(entry.data);
+    if (entry.method !== 8 || typeof DecompressionStream !== 'function') throw new Error('unsupported zip entry');
+    const ds = new DecompressionStream('deflate-raw');
+    const w = ds.writable.getWriter();
+    w.write(entry.data.slice());
+    w.close();
+    const buf = await new Response(ds.readable).arrayBuffer();
+    return new TextDecoder('utf-8').decode(buf);
+  }
+
+  // --- automatic check: on when the setting says so, the last check is older than maxAgeMs (or there is
+  // none), nothing runs, Instagram has not asked for a pause, and it has not already run on this page.
+  function shouldAutoCheck(s) {
+    if (!s || !s.enabled || s.running || s.ranAlready) return false;
+    if (typeof s.cooldownUntil === 'number' && s.now < s.cooldownUntil) return false;
+    if (!s.lastAt) return true;
+    return s.now - s.lastAt >= s.maxAgeMs;
+  }
+  // The app exists to check by itself; in a browser the user may be on Instagram for other reasons.
+  const autoCheckDefault = (host) => host === 'android';
+
+  // --- update notice: the latest GitHub release against what runs here.
+  function compareVersions(a, b) {
+    const parse = (v) => String(v || '').trim().replace(/^v/i, '').split('.').map((x) => parseInt(x, 10) || 0);
+    const pa = parse(a), pb = parse(b);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const d = (pa[i] || 0) - (pb[i] || 0);
+      if (d) return d < 0 ? -1 : 1;
+    }
+    return 0;
+  }
+  // rel: the releases/latest object from GitHub's API. cur: { host, script, app }. The Android app compares its
+  // APK version with the tag; the extension compares the script version the release notes carry.
+  function parseRelease(rel, cur) {
+    if (!rel || typeof rel !== 'object' || typeof rel.tag_name !== 'string' || rel.draft || rel.prerelease) return null;
+    const tag = rel.tag_name.trim();
+    if (!/^v?\d+\.\d+\.\d+$/.test(tag)) return null;
+    const m = String(rel.body || '').match(/Script version (\d+\.\d+\.\d+)/i);
+    const script = m ? m[1] : '';
+    const assets = Array.isArray(rel.assets) ? rel.assets : [];
+    const find = (re) => {
+      const a = assets.find((x) => x && typeof x.name === 'string' && re.test(x.name) && typeof x.browser_download_url === 'string');
+      return a ? a.browser_download_url : '';
+    };
+    const out = { tag, version: tag.replace(/^v/i, ''), script, url: typeof rel.html_url === 'string' ? rel.html_url : '', apk: find(/\.apk$/i), ext: find(/extension.*\.zip$/i), newer: false, get: '' };
+    const host = cur && cur.host;
+    if (host === 'android') { out.newer = !!cur.app && compareVersions(out.version, cur.app) > 0; out.get = out.apk || out.url; }
+    else if (host === 'extension') { out.newer = !!script && !!cur.script && compareVersions(script, cur.script) > 0; out.get = out.ext || out.url; }
+    return out;
+  }
+
+  return { emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipEntries, zipText, shouldAutoCheck, autoCheckDefault, compareVersions, parseRelease, loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
 });
 
 ;
@@ -916,6 +1104,29 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     sortName: 'Sort: username',
     sortFollowers: 'Sort: most followers',
     sortRatio: 'Sort: least likely to follow back',
+    sortSince: 'Sort: longest wait',
+    settings: 'Settings',
+    autoCheck: 'Check by itself when the last check is older than {d} days',
+    reminder: 'Remind me with a notification after a week without a check',
+    datesHint: 'Exact follow dates: import Instagram’s “Download your information” export (the zip itself, or following.json / followers_1.json from it). Until then the dates come from the checks: an account followed after your first check gets the date of the check that noticed it.',
+    datesImport: 'Import export file',
+    datesNone: 'No export imported yet.',
+    datesStatus: 'Export imported {d}: exact dates for {a} following and {b} followers.',
+    toastDates: 'Dates imported: {a} following, {b} followers',
+    toastDatesNone: 'No follow dates found in that file. Use the export zip, or following.json / followers_1.json from it.',
+    toastDatesWhich: 'Cannot tell which list this file is. Name it following.json or followers_1.json.',
+    toastZipOld: 'This browser cannot read zip files. Unzip it and import following.json.',
+    sinceFollowing: 'following since {d} · {n} days',
+    sinceFollowsYou: 'follows you since {d} · {n} days',
+    sinceBefore: 'since before {d} (your first check)',
+    sinceExact: 'From Instagram’s export: exact.',
+    sinceApprox: 'Noticed by a check: the real date is between that check and the one before it. Import the export for exact dates.',
+    fabChecking: 'Checking…',
+    fabResult: 'Follow check · +{g} / −{l}',
+    updNew: 'Version {v} is out.',
+    updGet: 'Get it',
+    updLater: 'Later',
+    picFail: 'Profile pictures that did not load: {n} (from {host}).',
     countsPaused: 'Counts paused until {t}: Instagram asked to slow down. What was loaded so far is kept.',
   };
 
@@ -1166,6 +1377,29 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     sortName: 'ترتيب: الاسم',
     sortFollowers: 'ترتيب: الأكتر متابعين',
     sortRatio: 'ترتيب: الأصعب يردوا',
+    sortSince: 'ترتيب: الأقدم متابعة',
+    settings: 'الإعدادات',
+    autoCheck: 'افحص لوحدك لو آخر فحص بقاله أكتر من {d} أيام',
+    reminder: 'فكّرني بإشعار لو عدى أسبوع من غير فحص',
+    datesHint: 'تواريخ المتابعة بالظبط: استورد "تنزيل بياناتك" من إنستجرام (ملف الـ zip نفسه، أو following.json / followers_1.json منه). لحد ما تعمل كده التواريخ بتيجي من الفحوصات: اللي تابعته بعد أول فحص بياخد تاريخ الفحص اللي لاحظه.',
+    datesImport: 'استيراد ملف التنزيل',
+    datesNone: 'لسه مفيش ملف تنزيل متستورد.',
+    datesStatus: 'اتستورد التنزيل {d}: تواريخ بالظبط لـ {a} بتتابعهم و{b} متابعين.',
+    toastDates: 'التواريخ اتستوردت: {a} بتتابعهم، {b} متابعين',
+    toastDatesNone: 'مفيش تواريخ متابعة في الملف ده. استخدم ملف الـ zip، أو following.json / followers_1.json منه.',
+    toastDatesWhich: 'مش عارف الملف ده أنهي قايمة. سمّيه following.json أو followers_1.json.',
+    toastZipOld: 'المتصفح ده مش بيقرا ملفات zip. فكّه واستورد following.json.',
+    sinceFollowing: 'بتتابعه من {d} · {n} يوم',
+    sinceFollowsYou: 'بيتابعك من {d} · {n} يوم',
+    sinceBefore: 'من قبل {d} (أول فحص ليك)',
+    sinceExact: 'من تنزيل إنستجرام: بالظبط.',
+    sinceApprox: 'لاحظه فحص: التاريخ الحقيقي بين الفحص ده واللي قبله. استورد التنزيل علشان التواريخ بالظبط.',
+    fabChecking: 'بيفحص…',
+    fabResult: 'فحص المتابعين · +{g} / −{l}',
+    updNew: 'نزلت نسخة {v}.',
+    updGet: 'نزّلها',
+    updLater: 'بعدين',
+    picFail: 'صور بروفايل ما اتحمّلتش: {n} (من {host}).',
     countsPaused: 'الأرقام واقفة لحد {t}: إنستجرام طلب نهدّي. اللي اتحمّل لحد دلوقتي متحفوظ.',
   };
 
@@ -1190,10 +1424,14 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipText, shouldAutoCheck, autoCheckDefault, parseRelease } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
+  // The script's own version: the extension reads its manifest, the bundles carry what the build stamped in.
+  const SCRIPT_VERSION = (() => { try { return chrome.runtime.getManifest().version; } catch (e) { return typeof window.FBC_VERSION === 'string' ? window.FBC_VERSION : ''; } })();
+  // The Android app's bridge (window.FollowCheckHost), when running inside it.
+  const hostApp = () => (HOST === 'android' && window.FollowCheckHost ? window.FollowCheckHost : null);
 
   // Instagram web internals. If Instagram changes its site, these are the lines to revisit.
   const API = {
@@ -1281,6 +1519,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 
   // --- storage: extension storage when it exists, otherwise the site's localStorage
   const cs = (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) ? chrome.storage.local : null;
+  // Where the script runs; the userscript looks like the extension except for the missing extension storage.
+  const RUNTIME = HOST === 'android' ? 'android' : HOST === 'bookmarklet' ? 'bookmarklet' : cs ? 'extension' : 'userscript';
   function storageGet(keys) {
     return new Promise((resolve) => {
       if (cs) {
@@ -1317,6 +1557,11 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const actStoreKey = (uid) => 'fbc.actions.' + uid;
   const logStoreKey = (uid) => 'fbc.log.' + uid;
   const pendStoreKey = (uid) => 'fbc.pending.' + uid;
+  const datesStoreKey = (uid) => 'fbc.dates.' + uid;
+  // Automatic check: when the last one is older than this, a few seconds after the page loads.
+  const AUTO = { maxAgeMs: 3 * 86400000, delayMs: 4000 };
+  // Update notice: GitHub's latest release, asked at most once a day.
+  const UPDATE = { everyMs: 86400000 };
   const LOG_CAP = 500;
   // Counts of other accounts, shared by every logged-in account: username -> { fw, fg, at }.
   const COUNTS_KEY = 'fbc.counts';
@@ -1475,12 +1720,14 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     changes: { label: 'tileHistory', title: 'titleHistory', empty: '' },
   };
   const freshActions = () => ({ times: [], pausedUntil: 0, warned: false });
-  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), loops: new Map(), react: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0, countsPausedUntil: 0 };
+  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), loops: new Map(), react: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0, countsPausedUntil: 0, dates: null, autoCheck: false, upd: { at: 0, seen: '', rel: null } };
   const live = { following: 0, followers: 0 };
   const ui = {};
   // Small preferences, remembered across visits: language, panel width, and the pause after Instagram asks us to slow down.
   const UI_KEY = 'fbc.ui';
-  function saveUi() { storageSet({ [UI_KEY]: { lang, width: state.width, cooldownUntil: state.cooldownUntil, countsPausedUntil: state.countsPausedUntil } }); }
+  function saveUi() { storageSet({ [UI_KEY]: { lang, width: state.width, cooldownUntil: state.cooldownUntil, countsPausedUntil: state.countsPausedUntil, autoCheck: state.autoCheck, upd: state.upd } }); }
+  let prefsLoaded;
+  const prefsReady = new Promise((resolve) => { prefsLoaded = resolve; }); // the automatic check waits for the settings
   const WIDTH = { def: 640, min: 380, max: 1100, narrowBelow: 560 };
   function applyWidth(w) {
     const cap = Math.min(WIDTH.max, window.innerWidth || WIDTH.max);
@@ -1527,6 +1774,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.rel = h('button', { class: 'rel', type: 'button', hidden: true, onclick: () => recheckRel() }, ui.relDot, ui.relName, ui.relText);
     ui.fabwrap = h('div', { class: 'fabwrap' }, ui.rel, ui.fab);
     ui.me = h('span', { class: 'me' });
+    ui.settingsBtn = h('button', { class: 'icon gear', type: 'button', onclick: () => toggleSettings() }, '⚙');
     ui.langBtn = h('button', { class: 'lang', type: 'button', onclick: () => setLang(lang === 'ar' ? 'en' : 'ar') });
     ui.close = h('button', { class: 'icon', type: 'button', onclick: () => toggle(false) }, '×');
     ui.check = h('button', { class: 'btn primary', type: 'button', onclick: () => startCheck() });
@@ -1560,7 +1808,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.share = h('button', { class: 'btn small', type: 'button', onclick: () => openShareCard() });
     ui.kindOpts = ['all', 'verified', 'notVerified', 'private', 'public'].map((v) => h('option', { value: v }));
     ui.kindFilter = h('select', { class: 'field sel', onchange: () => { state.kind = ui.kindFilter.value; renderList(); } }, ui.kindOpts);
-    ui.sortOpts = ['name', 'followers', 'ratio'].map((v) => h('option', { value: v }));
+    ui.sortOpts = ['name', 'followers', 'ratio', 'since'].map((v) => h('option', { value: v }));
     ui.sortSel = h('select', { class: 'field sel', onchange: () => { state.sort = ui.sortSel.value; renderList(); } }, ui.sortOpts);
     ui.countsBtn = h('button', { class: 'btn small', type: 'button', onclick: () => loadCounts() });
     ui.filterOpts = ['all', 'others', 'gained', 'lost', 'you_followed', 'you_unfollowed', 'deactivated', 'reactivated'].map((v) => h('option', { value: v }));
@@ -1588,6 +1836,26 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.pendFile = h('input', { type: 'file', accept: '.json,.html,.htm,.txt,application/json,text/html,text/plain', hidden: true, onchange: () => importPendingFile() });
     ui.pendImport = h('button', { class: 'btn small', type: 'button', onclick: () => ui.pendFile.click() });
     ui.pend = h('div', { class: 'prot', hidden: true }, ui.pendHint, h('div', { class: 'toolbar' }, ui.pendImport, ui.pendFile));
+    // Settings: the automatic check, the app's reminder, and the export import for exact follow dates.
+    ui.settingsTitle = h('div', { class: 'stitle' });
+    ui.autoCheck = h('input', { type: 'checkbox', onchange: () => { state.autoCheck = ui.autoCheck.checked; saveUi(); maybeAutoCheck(); } });
+    ui.autoCheckText = h('span');
+    ui.reminder = h('input', { type: 'checkbox', onchange: () => setReminder(ui.reminder.checked) });
+    ui.reminderText = h('span');
+    const app = hostApp();
+    ui.reminderWrap = h('label', { class: 'chk', hidden: !(app && typeof app.setReminder === 'function') }, ui.reminder, ui.reminderText);
+    if (app && typeof app.reminderEnabled === 'function') { try { ui.reminder.checked = app.reminderEnabled() !== false; } catch (e) { ui.reminder.checked = true; } }
+    ui.datesHint = h('div', { class: 'hint' });
+    ui.datesFile = h('input', { type: 'file', accept: '.zip,.json,.html,.htm,application/zip,application/x-zip-compressed,application/json,text/html', hidden: true, onchange: () => importDatesFile() });
+    ui.datesImport = h('button', { class: 'btn small', type: 'button', onclick: () => ui.datesFile.click() });
+    ui.datesStatus = h('div', { class: 'hint' });
+    ui.picStatus = h('div', { class: 'hint', hidden: true });
+    ui.settings = h('div', { class: 'settings', hidden: true }, ui.settingsTitle, h('label', { class: 'chk' }, ui.autoCheck, ui.autoCheckText), ui.reminderWrap, ui.datesHint, h('div', { class: 'toolbar' }, ui.datesImport, ui.datesFile), ui.datesStatus, ui.picStatus);
+    // Update notice: shown when GitHub's latest release is newer than what runs here.
+    ui.updText = h('span', { class: 'updtext' });
+    ui.updGet = h('button', { class: 'btn small primary', type: 'button', onclick: () => openUpdate() });
+    ui.updLater = h('button', { class: 'btn small', type: 'button', onclick: () => dismissUpdate() });
+    ui.update = h('div', { class: 'update', hidden: true }, ui.updText, ui.updGet, ui.updLater);
     ui.list = h('div', { class: 'list' });
     ui.empty = h('div', { class: 'empty', hidden: true });
     ui.notice = h('div', { class: 'notice', hidden: true });
@@ -1603,8 +1871,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.body = h('div', { class: 'body' }, ui.results, ui.empty);
     ui.drawer = h('section', { class: 'drawer', role: 'dialog', 'aria-label': 'Follow Back Checker', hidden: true },
       ui.grip,
-      h('header', { class: 'head' }, h('div', { class: 'headl' }, h('span', { class: 'title' }, 'Follow Back Checker'), ui.me), h('div', { class: 'headr' }, ui.langBtn, ui.close)),
+      h('header', { class: 'head' }, h('div', { class: 'headl' }, h('span', { class: 'title' }, 'Follow Back Checker'), ui.me), h('div', { class: 'headr' }, ui.settingsBtn, ui.langBtn, ui.close)),
       h('div', { class: 'controls' }, ui.check, ui.cancel, ui.status),
+      ui.settings,
+      ui.update,
       ui.progress,
       ui.error,
       ui.body,
@@ -1633,6 +1903,12 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       if (typeof prefs.cooldownUntil === 'number' && prefs.cooldownUntil > Date.now()) state.cooldownUntil = prefs.cooldownUntil;
       if (typeof prefs.countsPausedUntil === 'number' && prefs.countsPausedUntil > Date.now()) state.countsPausedUntil = prefs.countsPausedUntil;
       if ((prefs.lang === 'ar' || prefs.lang === 'en') && prefs.lang !== lang) setLang(prefs.lang, true);
+      state.autoCheck = typeof prefs.autoCheck === 'boolean' ? prefs.autoCheck : autoCheckDefault(HOST);
+      ui.autoCheck.checked = state.autoCheck;
+      const upd = prefs.upd && typeof prefs.upd === 'object' ? prefs.upd : {};
+      state.upd = { at: Number(upd.at) || 0, seen: typeof upd.seen === 'string' ? upd.seen : '', rel: upd.rel && typeof upd.rel === 'object' ? upd.rel : null };
+      prefsLoaded();
+      checkForUpdate();
     });
   }
   // Every static label, in the current language; dynamic text is rebuilt by applySnapshot().
@@ -1643,6 +1919,18 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.fabwrap.setAttribute('dir', dir);
     ui.fab.textContent = t('fab');
     ui.langBtn.textContent = t('langToggle');
+    ui.settingsBtn.title = t('settings');
+    ui.settingsBtn.setAttribute('aria-label', t('settings'));
+    ui.settingsTitle.textContent = t('settings');
+    ui.autoCheckText.textContent = t('autoCheck', { d: Math.round(AUTO.maxAgeMs / 86400000) });
+    ui.reminderText.textContent = t('reminder');
+    ui.datesHint.textContent = t('datesHint');
+    ui.datesImport.textContent = t('datesImport');
+    ui.updGet.textContent = t('updGet');
+    ui.updLater.textContent = t('updLater');
+    updateDatesStatus();
+    updatePicStatus();
+    showUpdate();
     ui.close.setAttribute('aria-label', t('close'));
     ui.check.textContent = t('checkNow');
     ui.cancel.textContent = t('cancel');
@@ -1659,7 +1947,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.lbShowNameText.textContent = t('showName');
     const kindKeys = ['kindAll', 'kindVerified', 'kindNotVerified', 'kindPrivate', 'kindPublic'];
     ui.kindOpts.forEach((o, i) => { o.textContent = t(kindKeys[i]); });
-    const sortKeys = ['sortName', 'sortFollowers', 'sortRatio'];
+    const sortKeys = ['sortName', 'sortFollowers', 'sortRatio', 'sortSince'];
     ui.sortOpts.forEach((o, i) => { o.textContent = t(sortKeys[i]); });
     ui.countsBtn.title = t('loadCountsTitle', { n: COUNTS.max });
     if (!state.countsRun) ui.countsBtn.textContent = t('loadCounts');
@@ -2028,6 +2316,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     const open = typeof force === 'boolean' ? force : !state.open;
     state.open = open;
     if (open) { syncTheme(); applyWidth(state.width); }
+    if (open && !state.running) ui.fab.textContent = t('fab'); // the result shown after an automatic check has been seen
     ui.drawer.hidden = !open;
     ui.fabwrap.hidden = open;
   }
@@ -2217,14 +2506,34 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     }
     downloadText(name, 'text/csv', '﻿' + toCsv(rows));
   }
-  function avatarNode(r) {
-    if (r.pic) {
-      const img = h('img', { class: 'avatar', src: r.pic, alt: '', loading: 'lazy', onclick: () => openLightbox(r) });
-      // Instagram's picture links expire after a while; fall back to the first letter.
-      img.addEventListener('error', () => img.replaceWith(h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase())));
-      return img;
+  // Avatars load when their row comes into view: the panel scrolls inside its own box, so the browser's
+  // own lazy loading is not relied on. A failed load gets one more try before the first letter stands in,
+  // and the failures are counted for the Settings box, since a phone cannot show its console.
+  const pics = { failed: 0, host: '' };
+  const avatarWatch = typeof IntersectionObserver === 'function' ? new IntersectionObserver((entries) => {
+    for (const en of entries) {
+      if (!en.isIntersecting) continue;
+      avatarWatch.unobserve(en.target);
+      if (en.target.dataset.src) { en.target.src = en.target.dataset.src; delete en.target.dataset.src; }
     }
-    return h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase());
+  }, { rootMargin: '400px' }) : null;
+  function avatarNode(r) {
+    if (!r.pic) return h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase());
+    const img = h('img', { class: 'avatar', alt: '', onclick: () => openLightbox(r) });
+    let retried = false;
+    img.addEventListener('error', () => {
+      if (!retried) { retried = true; setTimeout(() => { img.src = r.pic; }, 1500); return; }
+      pics.failed++;
+      if (!pics.host) { try { pics.host = new URL(r.pic).host; } catch (e) { pics.host = '?'; } }
+      img.replaceWith(h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase()));
+      if (pics.failed === 1 || pics.failed % 25 === 0) updatePicStatus();
+    });
+    if (avatarWatch) { img.dataset.src = r.pic; avatarWatch.observe(img); } else img.src = r.pic;
+    return img;
+  }
+  function updatePicStatus() {
+    ui.picStatus.hidden = !pics.failed;
+    if (pics.failed) ui.picStatus.textContent = t('picFail', { n: num(pics.failed), host: pics.host });
   }
   function rowNode(r, withCheck) {
     const row = h('div', { class: 'row' + (withCheck && isDone(r.u) ? ' done' : '') });
@@ -2240,7 +2549,10 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     row.append(avatarNode(r));
     row.append(h('div', { class: 'who' },
       h('a', { class: 'handle', href: 'https://www.instagram.com/' + encodeURIComponent(r.u) + '/', target: '_blank', rel: 'noopener noreferrer' }, '@' + r.u, h('span', { class: 'arrow' }, '↗')),
-      r.name ? h('div', { class: 'name', title: r.name }, r.name) : null));
+      r.name ? h('div', { class: 'name', title: r.name }, r.name) : null,
+      sinceNode(r.u)));
+    const acts = h('span', { class: 'acts' });
+    row.acts = acts; // every button of the row goes in here, so they wrap together (see actsOf)
     if (r.ver) row.append(h('span', { class: 'tag ver' }, t('verifiedTag')));
     if (r.priv) row.append(h('span', { class: 'tag' }, t('privateTag')));
     const cnt = state.tab !== 'changes' ? state.counts[r.u] : null;
@@ -2266,7 +2578,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
         ub.textContent = t('unfollowConfirm');
         setTimeout(() => { if (armed && Date.now() - armed >= 3900) { armed = 0; ub.classList.remove('arm'); ub.textContent = t('unfollow'); } }, 4000);
       });
-      row.append(ub);
+      acts.append(ub);
     }
     if (withCheck && state.tab === 'fans' && r.id) {
       // Follow back: the same two-tap arming, spacing and caps as Unfollow.
@@ -2279,7 +2591,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
         fb.textContent = t('unfollowConfirm');
         setTimeout(() => { if (armed && Date.now() - armed >= 3900) { armed = 0; fb.classList.remove('arm'); fb.textContent = t('follow'); } }, 4000);
       });
-      row.append(fb);
+      acts.append(fb);
     }
     if (withCheck) {
       const on = isProtected(r.u);
@@ -2292,15 +2604,22 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
         applyTiles();
         if (state.tab === 'notback' && now && !state.showProtected) { row.remove(); if (!ui.list.children.length) renderList(); }
       });
-      row.append(pb);
+      acts.append(pb);
     }
     if (withCheck) {
       // The lists come from the last check; this asks Instagram about this one account right now.
       const vb = h('button', { class: 'verify', type: 'button', title: t('verifyTitle') }, t('verify'));
       vb.addEventListener('click', () => verifyRow(r, row, vb));
-      row.append(vb);
+      acts.append(vb);
     }
+    if (acts.childElementCount) row.append(acts);
     return row;
+  }
+  // The buttons a list adds to a row after rowNode() join the same end-of-row group.
+  function actsOf(row) {
+    if (!row.acts) row.acts = h('span', { class: 'acts' });
+    if (row.acts.parentNode !== row) row.append(row.acts);
+    return row.acts;
   }
   async function verifyRow(r, row, btn) {
     if (btn.disabled) return;
@@ -2316,7 +2635,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       const they = rel.followsYou ? t('liveFollowsYou') : rel.theyRequested ? t('liveTheyRequested') : t('liveNotFollowsYou');
       const you = rel.youFollow ? t('liveYouFollow') : rel.youRequested ? t('liveYouRequested') : t('liveYouNot');
       let chip = row.querySelector('.chip.live');
-      if (!chip) { chip = h('span', { class: 'chip live' }); row.append(chip); }
+      if (!chip) { chip = h('span', { class: 'chip live' }); row.insertBefore(chip, row.acts && row.acts.parentNode === row ? row.acts : null); }
       chip.textContent = t('liveChip', { a: they, b: you });
       chip.classList.toggle('good', !!(rel.followsYou && rel.youFollow));
     } catch (e) {
@@ -2334,7 +2653,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     if ((state.tab === 'notback' || state.tab === 'fans') && state.onlyLeft) rows = rows.filter((r) => state.left.has(r.u));
     if (state.hideDone) rows = rows.filter((r) => !isDone(r.u));
     if (state.kind !== 'all') rows = rows.filter((r) => matchesKind(r, state.kind));
-    return sortRows(rows, state.sort, state.counts);
+    return sortRows(rows, state.sort, state.counts, (u) => sinceOf(state.dates, state.tab === 'fans' ? 'followers' : 'following', u));
   }
   function renderProtected() {
     ui.listTitle.textContent = t('protectedTitle');
@@ -2342,7 +2661,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.protList.replaceChildren();
     for (const u of names) {
       const row = rowNode(lookupRecord(u) || { u, name: '', priv: false, ver: false, pic: '' }, false);
-      row.append(h('button', { class: 'verify', type: 'button', onclick: () => { setProtected(u, false); applyTiles(); renderList(); } }, t('remove')));
+      actsOf(row).append(h('button', { class: 'verify', type: 'button', onclick: () => { setProtected(u, false); applyTiles(); renderList(); } }, t('remove')));
       ui.protList.append(row);
     }
     ui.protList.hidden = names.length === 0;
@@ -2359,8 +2678,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       row.append(h('span', { class: 'chip' }, t('pendingChip', { d: fmtMD(p.ts) })));
       const sb = h('button', { class: 'verify', type: 'button', title: t('stillPendingTitle') }, t('stillPending'));
       sb.addEventListener('click', () => checkPendingRow(p, row, sb));
-      row.append(sb);
-      row.append(armedButton('unf', t('cancelReq'), t('cancelTitle'), (btn) => cancelRow(p, row, btn)));
+      actsOf(row).append(sb, armedButton('unf', t('cancelReq'), t('cancelTitle'), (btn) => cancelRow(p, row, btn)));
       ui.list.append(row);
     }
     ui.list.hidden = rows.length === 0;
@@ -2375,7 +2693,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       const row = rowNode(Object.assign({ u: e.u, name: e.name, priv: e.priv, ver: false, pic: e.pic || '', id: e.id }, lookupRecord(e.u) || {}, { id: e.id || (lookupRecord(e.u) || {}).id || '' }), false);
       row.append(h('span', { class: 'chip ' + (e.type === 'unfollow' || e.type === 'cancel' ? 'warn' : 'good') }, t(ACT_KEY[e.type] || 'actFollow', { d: fmtWhen(e.at) })));
       if (e.undone) row.append(h('span', { class: 'chip muted' }, t('undone', { d: fmtWhen(e.undone) })));
-      else if (UNDO[e.type]) row.append(armedButton('unf undo', t('undo'), t('undoTitle'), (btn) => undoRow(e, row, btn)));
+      else if (UNDO[e.type]) actsOf(row).append(armedButton('unf undo', t('undo'), t('undoTitle'), (btn) => undoRow(e, row, btn)));
       ui.list.append(row);
     }
     ui.list.hidden = rows.length === 0;
@@ -2612,7 +2930,8 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     else fallback();
   }
 
-  async function startCheck() {
+  // auto: started by the panel itself (see maybeAutoCheck); the button at the bottom then carries the result.
+  async function startCheck(auto) {
     if (state.running) return;
     const uid = cookie('ds_user_id');
     if (uid !== state.uid) await loadAccount(uid);
@@ -2622,20 +2941,27 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.check.disabled = true;
     ui.cancel.hidden = false;
     ui.error.hidden = true;
+    if (auto) ui.fab.textContent = t('fabChecking');
     showProgress({ phase: 'info' });
     try {
       const snap = await runCheck(state.ctl, showProgress);
       if (state.uid !== uid || snap.uid !== uid) throw new Cancelled(); // the account changed mid-check; never mix results
       snap.me = carryMe(snap, state.snap); // the account-info request can be throttled; keep the name we already know
       const knownEvents = state.hist && Array.isArray(state.hist.events) ? state.hist.events : [];
-      state.hist = appendHistory(state.hist, pointFrom(snap), eventsFrom(diff(state.snap, snap), snap.at, goneSet(knownEvents)), HIST_CAPS);
+      const events = eventsFrom(diff(state.snap, snap), snap.at, goneSet(knownEvents));
+      state.hist = appendHistory(state.hist, pointFrom(snap), events, HIST_CAPS);
       state.prev = state.snap;
       state.snap = snap;
-      await storageSet({ [acctStoreKey(uid)]: { last: snap, prev: state.prev }, [histStoreKey(uid)]: state.hist });
+      noteDates(events, snap.at);
+      await storageSet({ [acctStoreKey(uid)]: { last: snap, prev: state.prev }, [histStoreKey(uid)]: state.hist, [datesStoreKey(uid)]: state.dates });
       state.tab = 'notback';
       applySnapshot();
       toast(t('toastChecked', { a: num(snap.following.length), b: num(snap.followers.length) }));
+      const app = hostApp();
+      if (app && typeof app.noteCheck === 'function') { try { app.noteCheck(snap.at); } catch (e) { /* older app build */ } }
+      if (auto) ui.fab.textContent = t('fabResult', { g: num(events.filter((e) => e.type === 'gained').length), l: num(events.filter((e) => e.type === 'lost').length) });
     } catch (e) {
+      if (auto) ui.fab.textContent = t('fab');
       if (e instanceof Cancelled) toast(t('toastCancelled'));
       else showError(e && e.message ? e.message : t('errGeneric'));
     } finally {
@@ -2673,13 +2999,13 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   async function loadAccount(uid) {
     const seq = ++loadSeq;
     state.uid = uid;
-    state.snap = null; state.prev = null; state.done = {}; state.white = {}; state.actions = freshActions(); state.lists = null; state.hist = null; state.log = []; state.pending = [];
+    state.snap = null; state.prev = null; state.done = {}; state.white = {}; state.actions = freshActions(); state.lists = null; state.hist = null; state.log = []; state.pending = []; state.dates = null;
     state.tab = 'notback';
     updateProtectedBtn();
     updateSideBtns();
     applySnapshot();
     if (!uid) return;
-    const r = await storageGet([acctStoreKey(uid), doneStoreKey(uid), histStoreKey(uid), whiteStoreKey(uid), actStoreKey(uid), logStoreKey(uid), pendStoreKey(uid), COUNTS_KEY, 'fbc', 'fbcDone']);
+    const r = await storageGet([acctStoreKey(uid), doneStoreKey(uid), histStoreKey(uid), whiteStoreKey(uid), actStoreKey(uid), logStoreKey(uid), pendStoreKey(uid), datesStoreKey(uid), COUNTS_KEY, 'fbc', 'fbcDone']);
     if (seq !== loadSeq) return; // another account took over while loading
     let acct = r[acctStoreKey(uid)];
     let done = r[doneStoreKey(uid)];
@@ -2715,7 +3041,16 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       state.hist = seeded;
       storageSet({ [histStoreKey(uid)]: seeded });
     }
+    const dates = r[datesStoreKey(uid)];
+    if (dates && typeof dates === 'object' && dates.following && dates.followers) state.dates = dates;
+    else if (state.hist && state.hist.points.length) {
+      // First time with dates: read the whole history once, the first check being the floor.
+      state.dates = applyDateEvents(emptyDates(state.hist.points[0].at), state.hist.events);
+      storageSet({ [datesStoreKey(uid)]: state.dates });
+    }
+    updateDatesStatus();
     applySnapshot();
+    maybeAutoCheck();
   }
   // Instagram can switch accounts without a reload, so follow the login cookie.
   function watchAccount() {
@@ -2954,10 +3289,12 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     if (followsYou === has) return;
     if (followsYou) snap.followers.push({ u: r.u, id: r.id, name: r.name || '', priv: !!r.priv, ver: !!r.ver, pic: r.pic || '' });
     else snap.followers = snap.followers.filter((x) => x.u !== r.u);
-    state.hist = appendHistory(state.hist, pointFrom(snap), [{ at: Date.now(), type: followsYou ? 'gained' : 'lost', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
+    const ev = { at: Date.now(), type: followsYou ? 'gained' : 'lost', u: r.u, name: r.name || '', priv: !!r.priv };
+    state.hist = appendHistory(state.hist, pointFrom(snap), [ev], HIST_CAPS);
+    noteDates([ev], snap.at);
     state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
     refreshFlags();
-    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
+    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist, [datesStoreKey(state.uid)]: state.dates });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
     applyTiles();
   }
@@ -2974,10 +3311,12 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     const snap = state.snap;
     if (!snap) return;
     snap.following = snap.following.filter((x) => x.u !== r.u);
-    state.hist = appendHistory(state.hist, pointFrom(snap), silent ? [] : [{ at: Date.now(), type: 'you_unfollowed', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
+    const evs = silent ? [] : [{ at: Date.now(), type: 'you_unfollowed', u: r.u, name: r.name || '', priv: !!r.priv }];
+    state.hist = appendHistory(state.hist, pointFrom(snap), evs, HIST_CAPS);
+    noteDates(evs, snap.at);
     state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
     refreshFlags();
-    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
+    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist, [datesStoreKey(state.uid)]: state.dates });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
     applyTiles();
   }
@@ -3009,10 +3348,12 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     const snap = state.snap;
     if (!snap || snap.following.some((x) => x.u === r.u)) return;
     snap.following.push({ u: r.u, id: r.id, name: r.name || '', priv: !!r.priv, ver: !!r.ver, pic: r.pic || '' });
-    state.hist = appendHistory(state.hist, pointFrom(snap), silent ? [] : [{ at: Date.now(), type: 'you_followed', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
+    const evs = silent ? [] : [{ at: Date.now(), type: 'you_followed', u: r.u, name: r.name || '', priv: !!r.priv }];
+    state.hist = appendHistory(state.hist, pointFrom(snap), evs, HIST_CAPS);
+    noteDates(evs, snap.at);
     state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
     refreshFlags();
-    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
+    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist, [datesStoreKey(state.uid)]: state.dates });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
     applyTiles();
   }
@@ -3171,7 +3512,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       const v = await preflight('cancel', p);
       if (v === 'go') {
         let chip = row.querySelector('.chip.live');
-        if (!chip) { chip = h('span', { class: 'chip live' }); row.append(chip); }
+        if (!chip) { chip = h('span', { class: 'chip live' }); row.insertBefore(chip, row.acts && row.acts.parentNode === row ? row.acts : null); }
         chip.textContent = t('pendingStill');
       } else if (v !== 'unknown') renderList();
     } catch (e) {
@@ -3249,6 +3590,152 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       sheet.replaceSync('a[href^="intent:"], a[href*="applink.instagram.com"] { display: none !important; }');
       document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
     } catch (e) { /* older WebView: the navigation is blocked by the app anyway */ }
+  }
+
+  // --- settings, follow dates, the automatic check and the update notice
+  function toggleSettings() { ui.settings.hidden = !ui.settings.hidden; }
+  function setReminder(on) {
+    const app = hostApp();
+    if (!app || typeof app.setReminder !== 'function') return;
+    try { app.setReminder(!!on); } catch (e) { /* older app build */ }
+  }
+  const fmtD = (ms) => new Date(ms).toLocaleDateString(locale(), { month: 'short', day: 'numeric', year: 'numeric' });
+  const SINCE_LIST = { notback: 'following', mutual: 'following', protected: 'following', fans: 'followers' };
+  // One line under the name: since when you follow this account (or it follows you), and for how long.
+  function sinceNode(u) {
+    const list = SINCE_LIST[state.tab];
+    if (!list) return null;
+    const s = sinceOf(state.dates, list, u);
+    if (!s) return null;
+    if (s.before) return h('div', { class: 'since', title: t('sinceApprox') }, t('sinceBefore', { d: fmtD(s.at) }));
+    const days = Math.max(0, Math.round((Date.now() - s.at) / 86400000));
+    return h('div', { class: 'since', title: t(s.exact ? 'sinceExact' : 'sinceApprox') }, t(list === 'followers' ? 'sinceFollowsYou' : 'sinceFollowing', { d: fmtD(s.at), n: num(days) }));
+  }
+  function updateDatesStatus() {
+    const d = state.dates;
+    if (!d || !d.importedAt) { ui.datesStatus.textContent = t('datesNone'); return; }
+    const exact = (m) => Object.values(m || {}).filter((e) => e && e.x).length;
+    ui.datesStatus.textContent = t('datesStatus', { d: fmtD(d.importedAt), a: num(exact(d.following)), b: num(exact(d.followers)) });
+  }
+  // Keeps the follow dates in step with the history. at: the check's date, the floor when there was none before.
+  function noteDates(events, at) {
+    if (!state.dates) state.dates = emptyDates(at || Date.now());
+    state.dates = applyDateEvents(state.dates, events);
+    updateDatesStatus();
+  }
+  // Reads the list files out of an export zip through File.slice, so the media inside is never loaded.
+  async function readExportZip(file) {
+    const size = file.size;
+    const tail = new Uint8Array(await file.slice(Math.max(0, size - 65557), size).arrayBuffer());
+    const e = zipFindEocd(tail, size);
+    if (!e) return null;
+    const cd = new Uint8Array(await file.slice(e.cdOffset, e.cdOffset + e.cdSize).arrayBuffer());
+    const out = [];
+    for (const c of exportListEntries(zipCentral(cd, e.count))) {
+      const at = zipDataStart(new Uint8Array(await file.slice(c.lho, c.lho + 30).arrayBuffer()));
+      if (at < 0) continue;
+      const data = new Uint8Array(await file.slice(c.lho + at, c.lho + at + c.csize).arrayBuffer());
+      out.push({ name: c.name, text: await zipText({ method: c.method, data }) });
+    }
+    return out;
+  }
+  async function importDatesFile() {
+    const f = ui.datesFile.files && ui.datesFile.files[0];
+    ui.datesFile.value = '';
+    if (!f || !state.uid) return;
+    try {
+      let files;
+      const head = new Uint8Array(await f.slice(0, 2).arrayBuffer());
+      if (head[0] === 0x50 && head[1] === 0x4b) {
+        if (typeof DecompressionStream !== 'function') { toast(t('toastZipOld')); return; }
+        files = await readExportZip(f);
+        if (!files) { toast(t('toastDatesNone')); return; }
+      } else {
+        files = [{ name: f.name, text: await f.text() }];
+      }
+      let a = 0, b = 0, unknown = false;
+      for (const file of files) {
+        const rows = parsePending(file.text);
+        if (!rows.length) continue;
+        const kind = guessListKind(file.name, rows, state.snap);
+        if (!kind) { unknown = true; continue; }
+        const res = importDates(state.dates || emptyDates(state.snap ? state.snap.at : 0), rows, kind, Date.now());
+        state.dates = res.dates;
+        if (kind === 'followers') b += res.added; else a += res.added;
+      }
+      if (!a && !b) { toast(t(unknown ? 'toastDatesWhich' : 'toastDatesNone')); return; }
+      await storageSet({ [datesStoreKey(state.uid)]: state.dates });
+      updateDatesStatus();
+      renderList();
+      toast(t('toastDates', { a: num(a), b: num(b) }));
+    } catch (e) {
+      toast(t('toastDatesNone'));
+    }
+  }
+  // The check that starts by itself: once per page load and account, a few seconds after the panel is ready.
+  const autoRan = new Set();
+  async function maybeAutoCheck() {
+    await prefsReady;
+    const uid = state.uid;
+    if (!uid || uid !== cookie('ds_user_id')) return;
+    const due = shouldAutoCheck({ enabled: state.autoCheck, lastAt: state.snap ? state.snap.at : 0, now: Date.now(), running: state.running, cooldownUntil: state.cooldownUntil, maxAgeMs: AUTO.maxAgeMs, ranAlready: autoRan.has(uid) });
+    if (!due) return;
+    autoRan.add(uid);
+    await sleep(AUTO.delayMs);
+    if (state.uid !== uid || state.running) return;
+    startCheck(true);
+  }
+  // The latest release: the app keeps a copy (its own request), the extension asks its background script.
+  // Instagram's page rules block that request from the page itself, so the userscript and bookmarklet skip it.
+  function fetchRelease() {
+    if (RUNTIME === 'android') {
+      const app = hostApp();
+      if (!app || typeof app.latestRelease !== 'function') return Promise.resolve(null);
+      try { const text = app.latestRelease(); return Promise.resolve(text ? JSON.parse(text) : null); } catch (e) { return Promise.resolve(null); }
+    }
+    if (RUNTIME === 'extension') {
+      return new Promise((resolve) => {
+        try { chrome.runtime.sendMessage({ type: 'fbc-release' }, (r) => { void chrome.runtime.lastError; resolve(r && r.ok ? r.release : null); }); } catch (e) { resolve(null); }
+      });
+    }
+    return Promise.resolve(null);
+  }
+  function appVersion() {
+    const app = hostApp();
+    if (!app || typeof app.appVersion !== 'function') return '';
+    try { return String(app.appVersion() || ''); } catch (e) { return ''; }
+  }
+  async function checkForUpdate() {
+    if (RUNTIME !== 'android' && RUNTIME !== 'extension') return;
+    const now = Date.now();
+    if (RUNTIME === 'extension' && now - state.upd.at < UPDATE.everyMs) { showUpdate(); return; }
+    const raw = await fetchRelease();
+    const rel = raw ? parseRelease(raw, { host: RUNTIME, script: SCRIPT_VERSION, app: appVersion() }) : null;
+    state.upd = { at: now, seen: state.upd.seen, rel: rel || (RUNTIME === 'android' ? null : state.upd.rel) };
+    saveUi();
+    showUpdate();
+  }
+  function showUpdate() {
+    const rel = state.upd && state.upd.rel;
+    const show = !!(rel && rel.newer && rel.get && state.upd.seen !== rel.tag);
+    ui.update.hidden = !show;
+    if (show) ui.updText.textContent = t('updNew', { v: rel.version });
+  }
+  function openUpdate() {
+    const rel = state.upd && state.upd.rel;
+    if (!rel || !rel.get) return;
+    const app = hostApp();
+    if (app && typeof app.openExternal === 'function') { try { if (app.openExternal(rel.get)) return; } catch (e) { /* fall through */ } }
+    const a = h('a', { href: rel.get, target: '_blank', rel: 'noopener noreferrer' });
+    root.append(a);
+    a.click();
+    a.remove();
+  }
+  function dismissUpdate() {
+    const rel = state.upd && state.upd.rel;
+    state.upd = Object.assign({}, state.upd, { seen: rel ? rel.tag : state.upd.seen });
+    saveUi();
+    ui.update.hidden = true;
   }
 
   // --- boot

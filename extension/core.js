@@ -74,11 +74,20 @@
     const back = d.back || [];
     const returned = back.filter((r) => gone.has(r.u));
     const fresh = back.filter((r) => !gone.has(r.u));
+    // A known-away account that reappears in one list only came back (both follows restored) and then
+    // lost the other edge before this check: in following only, it unfollowed you; in followers only,
+    // you unfollowed it. Neither is an action of yours to file as "you followed" or "they followed".
+    const youFollowed = (d.youFollowed || []).filter((r) => !gone.has(r.u));
+    const gained = (d.gained || []).filter((r) => !gone.has(r.u));
+    const backThenLeft = (d.youFollowed || []).filter((r) => gone.has(r.u));
+    const backThenDropped = (d.gained || []).filter((r) => gone.has(r.u));
     return [
-      ...mk('gained', d.gained), ...mk('lost', d.lost),
-      ...mk('you_followed', d.youFollowed), ...mk('you_unfollowed', d.youUnfollowed),
+      ...mk('gained', gained), ...mk('lost', d.lost),
+      ...mk('you_followed', youFollowed), ...mk('you_unfollowed', d.youUnfollowed),
       ...mk('deactivated', d.gone), ...mk('reactivated', returned),
       ...mk('gained', fresh), ...mk('you_followed', fresh),
+      ...mk('reactivated', backThenLeft), ...mk('lost', backThenLeft),
+      ...mk('reactivated', backThenDropped), ...mk('you_unfollowed', backThenDropped),
     ];
   }
   // Well-formed events, oldest first. Stored histories are trusted, but a damaged entry must not break a load.
@@ -427,11 +436,14 @@
     if (ratio <= 1.5) return 'good';
     return 'mid';
   }
-  function sortRows(rows, mode, counts) {
+  // since: optional (username) -> { at } for the 'since' mode, which puts the longest-standing follow first.
+  function sortRows(rows, mode, counts, since) {
     const byName = (a, b) => (a.u < b.u ? -1 : a.u > b.u ? 1 : 0);
     const c = (r) => (counts && counts[r.u]) || null;
+    const UNKNOWN = -Number.MAX_SAFE_INTEGER; // no date at all: after every dated row
     const key = mode === 'followers' ? (r) => (c(r) ? c(r).fw : -1)
       : mode === 'ratio' ? (r) => (c(r) ? (c(r).fg === 0 ? Infinity : c(r).fw / c(r).fg) : -1)
+      : mode === 'since' ? (r) => { const s = typeof since === 'function' ? since(r.u) : null; return s && typeof s.at === 'number' ? -s.at : UNKNOWN; }
       : null;
     const out = rows.slice();
     if (!key) return out.sort(byName);
@@ -448,5 +460,171 @@
     return out;
   }
 
-  return { loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
+
+  // --- "following since": one date per account. Exact when it comes from Instagram's own export,
+  // approximate when a check noticed the change (then it is the check's date, at most one check gap late).
+  // dates = { following: { u: { at, x } }, followers: { u: { at, x } }, floor, importedAt }
+  // floor: the first check's date; an account that was already there then is "since before" it.
+  function emptyDates(floor) { return { following: {}, followers: {}, floor: floor || 0, importedAt: 0 }; }
+  function applyDateEvents(dates, events) {
+    const d = dates && typeof dates === 'object' ? dates : emptyDates(0);
+    const following = Object.assign({}, d.following || {}), followers = Object.assign({}, d.followers || {});
+    for (const e of validEvents(events)) {
+      if (e.type === 'you_followed') following[e.u] = { at: e.at, x: false };
+      else if (e.type === 'you_unfollowed') delete following[e.u];
+      else if (e.type === 'gained') followers[e.u] = { at: e.at, x: false };
+      else if (e.type === 'lost') delete followers[e.u];
+    }
+    return { following, followers, floor: d.floor || 0, importedAt: d.importedAt || 0 };
+  }
+  // Rows from the export ({ u, ts }) replace what the checks guessed; rows without a date are skipped.
+  function importDates(dates, rows, kind, now) {
+    const d = dates && typeof dates === 'object' ? dates : emptyDates(0);
+    const key = kind === 'followers' ? 'followers' : 'following';
+    const map = Object.assign({}, d[key] || {});
+    let added = 0;
+    for (const r of rows || []) {
+      if (!r || typeof r.u !== 'string' || typeof r.ts !== 'number' || !(r.ts > 0)) continue;
+      map[r.u] = { at: r.ts, x: true };
+      added++;
+    }
+    return { dates: Object.assign({}, d, { [key]: map, importedAt: added ? now : (d.importedAt || 0) }), added };
+  }
+  // What to show for one account: { at, exact, before }. before: it was already there at the first check.
+  function sinceOf(dates, list, u) {
+    if (!dates || typeof dates !== 'object') return null;
+    const m = dates[list === 'followers' ? 'followers' : 'following'] || {};
+    const e = m[u];
+    if (e && typeof e.at === 'number') return { at: e.at, exact: !!e.x, before: false };
+    if (typeof dates.floor === 'number' && dates.floor > 0) return { at: dates.floor, exact: false, before: true };
+    return null;
+  }
+  // Which list an export file holds: its name says so; otherwise whichever of your lists it overlaps most.
+  function guessListKind(name, rows, snap) {
+    const n = String(name || '').toLowerCase();
+    if (/following/.test(n)) return 'following';
+    if (/follower/.test(n)) return 'followers';
+    if (!snap || !Array.isArray(snap.following) || !Array.isArray(snap.followers)) return null;
+    const fg = new Set(snap.following.map((r) => r.u)), fw = new Set(snap.followers.map((r) => r.u));
+    let a = 0, b = 0;
+    for (const r of rows || []) { if (r && fg.has(r.u)) a++; if (r && fw.has(r.u)) b++; }
+    if (!a && !b) return null;
+    return a >= b ? 'following' : 'followers';
+  }
+  // The list files inside Instagram's export zip (connections/followers_and_following/).
+  const EXPORT_LIST = /(^|\/)(following|followers(_\d+)?)\.(json|html)$/i;
+  function exportListEntries(entries) {
+    return (entries || []).filter((e) => e && typeof e.name === 'string' && EXPORT_LIST.test(e.name) && !/(^|\/)__MACOSX\//.test(e.name));
+  }
+  // A zip is read from its end: the end record points at the central directory, which lists every entry
+  // and where its local header sits. Three small pieces, so a page can read a large export through
+  // File.slice without loading the media inside it. No ZIP64.
+  const u8 = (bytes) => (bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+  // tail: the last bytes of the file (up to 64 KB + 22). Offsets count from the start of the file.
+  function zipFindEocd(tail, fileSize) {
+    const b = u8(tail);
+    const n = b.length;
+    if (n < 22) return null;
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    for (let i = n - 22; i >= Math.max(0, n - 22 - 65535); i--) {
+      if (dv.getUint32(i, true) !== 0x06054b50) continue;
+      const out = { count: dv.getUint16(i + 10, true), cdSize: dv.getUint32(i + 12, true), cdOffset: dv.getUint32(i + 16, true) };
+      const total = typeof fileSize === 'number' ? fileSize : n;
+      return out.cdOffset + out.cdSize <= total ? out : null;
+    }
+    return null;
+  }
+  // cd: the central directory bytes. Returns [{ name, method, size, csize, lho }].
+  function zipCentral(cd, count) {
+    const b = u8(cd);
+    const n = b.length;
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    const utf8 = new TextDecoder('utf-8');
+    const out = [];
+    let p = 0;
+    for (let i = 0; i < count && p + 46 <= n; i++) {
+      if (dv.getUint32(p, true) !== 0x02014b50) break;
+      const nlen = dv.getUint16(p + 28, true), xlen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
+      if (p + 46 + nlen > n) break;
+      out.push({ name: utf8.decode(b.subarray(p + 46, p + 46 + nlen)), method: dv.getUint16(p + 10, true), csize: dv.getUint32(p + 20, true), size: dv.getUint32(p + 24, true), lho: dv.getUint32(p + 42, true) });
+      p += 46 + nlen + xlen + clen;
+    }
+    return out;
+  }
+  // lh: the 30 bytes of a local header. How far past the header's start the data begins, or -1.
+  function zipDataStart(lh) {
+    const b = u8(lh);
+    if (b.length < 30) return -1;
+    const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    if (dv.getUint32(0, true) !== 0x04034b50) return -1;
+    return 30 + dv.getUint16(26, true) + dv.getUint16(28, true);
+  }
+  // The entries of a whole zip held in memory, with the raw bytes attached.
+  function zipEntries(bytes) {
+    const b = u8(bytes);
+    const e = zipFindEocd(b.subarray(Math.max(0, b.length - 65557)), b.length);
+    if (!e) return [];
+    const out = [];
+    for (const c of zipCentral(b.subarray(e.cdOffset, e.cdOffset + e.cdSize), e.count)) {
+      const at = zipDataStart(b.subarray(c.lho, c.lho + 30));
+      if (at < 0 || c.lho + at + c.csize > b.length) continue;
+      out.push(Object.assign({}, c, { data: b.subarray(c.lho + at, c.lho + at + c.csize) }));
+    }
+    return out;
+  }
+  // The text of one entry: stored ones as they are, deflated ones through the platform's decoder.
+  async function zipText(entry) {
+    if (!entry || !entry.data) return '';
+    if (entry.method === 0) return new TextDecoder('utf-8').decode(entry.data);
+    if (entry.method !== 8 || typeof DecompressionStream !== 'function') throw new Error('unsupported zip entry');
+    const ds = new DecompressionStream('deflate-raw');
+    const w = ds.writable.getWriter();
+    w.write(entry.data.slice());
+    w.close();
+    const buf = await new Response(ds.readable).arrayBuffer();
+    return new TextDecoder('utf-8').decode(buf);
+  }
+
+  // --- automatic check: on when the setting says so, the last check is older than maxAgeMs (or there is
+  // none), nothing runs, Instagram has not asked for a pause, and it has not already run on this page.
+  function shouldAutoCheck(s) {
+    if (!s || !s.enabled || s.running || s.ranAlready) return false;
+    if (typeof s.cooldownUntil === 'number' && s.now < s.cooldownUntil) return false;
+    if (!s.lastAt) return true;
+    return s.now - s.lastAt >= s.maxAgeMs;
+  }
+  // The app exists to check by itself; in a browser the user may be on Instagram for other reasons.
+  const autoCheckDefault = (host) => host === 'android';
+
+  // --- update notice: the latest GitHub release against what runs here.
+  function compareVersions(a, b) {
+    const parse = (v) => String(v || '').trim().replace(/^v/i, '').split('.').map((x) => parseInt(x, 10) || 0);
+    const pa = parse(a), pb = parse(b);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const d = (pa[i] || 0) - (pb[i] || 0);
+      if (d) return d < 0 ? -1 : 1;
+    }
+    return 0;
+  }
+  // rel: the releases/latest object from GitHub's API. cur: { host, script, app }. The Android app compares its
+  // APK version with the tag; the extension compares the script version the release notes carry.
+  function parseRelease(rel, cur) {
+    if (!rel || typeof rel !== 'object' || typeof rel.tag_name !== 'string' || rel.draft || rel.prerelease) return null;
+    const tag = rel.tag_name.trim();
+    if (!/^v?\d+\.\d+\.\d+$/.test(tag)) return null;
+    const m = String(rel.body || '').match(/Script version (\d+\.\d+\.\d+)/i);
+    const script = m ? m[1] : '';
+    const assets = Array.isArray(rel.assets) ? rel.assets : [];
+    const find = (re) => {
+      const a = assets.find((x) => x && typeof x.name === 'string' && re.test(x.name) && typeof x.browser_download_url === 'string');
+      return a ? a.browser_download_url : '';
+    };
+    const out = { tag, version: tag.replace(/^v/i, ''), script, url: typeof rel.html_url === 'string' ? rel.html_url : '', apk: find(/\.apk$/i), ext: find(/extension.*\.zip$/i), newer: false, get: '' };
+    const host = cur && cur.host;
+    if (host === 'android') { out.newer = !!cur.app && compareVersions(out.version, cur.app) > 0; out.get = out.apk || out.url; }
+    else if (host === 'extension') { out.newer = !!script && !!cur.script && compareVersions(script, cur.script) > 0; out.get = out.ext || out.url; }
+    return out;
+  }
+
+  return { emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipEntries, zipText, shouldAutoCheck, autoCheckDefault, compareVersions, parseRelease, loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
 });

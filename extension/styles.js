@@ -104,10 +104,12 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 
 .list { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .list > * + * { border-top: 1px solid var(--border); }
-.row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 8px 12px; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 10px; align-items: center; padding: 8px 12px; min-width: 0; }
 .row.done { opacity: 0.5; }
 .row.done .handle { text-decoration: line-through; }
-.who { flex: 1 1 160px; min-width: 140px; display: grid; gap: 1px; align-content: center; }
+.who { flex: 1 1 160px; min-width: 140px; display: grid; gap: 1px; align-content: center; justify-items: start; }
+.since { font-size: 11px; color: var(--muted); }
+.acts { display: inline-flex; align-items: center; gap: 6px; flex: none; margin-inline-start: auto; }
 .handle { flex: none; font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; font-size: 13.5px; font-weight: 500; color: var(--fg); text-decoration: none; overflow-wrap: anywhere; direction: ltr; unicode-bidi: isolate; }
 .handle:hover { color: var(--accent); text-decoration: underline; }
 .handle .arrow { color: var(--muted); font-size: 12px; margin-left: 4px; }
@@ -189,6 +191,13 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 @media (prefers-reduced-motion: reduce) { .pfill { transition: none; } .dot.loading { animation: none; } }
 
 /* Phones and the Android app: full-width panel, bigger targets, no resize grip. */
+.icon.gear { font-size: 18px; }
+.settings { margin: 0 16px 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; display: grid; gap: 8px; font-size: 13px; }
+.settings .stitle { font-weight: 600; }
+.settings .chk { color: var(--fg); align-items: flex-start; }
+.settings .chk input { margin-top: 2px; flex: none; }
+.update { margin: 0 16px 10px; padding: 10px 12px; border-radius: 8px; background: var(--accent-soft); color: var(--fg); font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.update .updtext { flex: 1 1 160px; }
 :host(.mobile) .fabwrap { right: 12px; bottom: 76px; max-width: calc(100vw - 24px); }
 :host(.mobile) .grip { display: none; }
 :host(.mobile) .drawer { width: 100vw; }

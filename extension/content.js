@@ -15,10 +15,14 @@
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipText, shouldAutoCheck, autoCheckDefault, parseRelease } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
+  // The script's own version: the extension reads its manifest, the bundles carry what the build stamped in.
+  const SCRIPT_VERSION = (() => { try { return chrome.runtime.getManifest().version; } catch (e) { return typeof window.FBC_VERSION === 'string' ? window.FBC_VERSION : ''; } })();
+  // The Android app's bridge (window.FollowCheckHost), when running inside it.
+  const hostApp = () => (HOST === 'android' && window.FollowCheckHost ? window.FollowCheckHost : null);
 
   // Instagram web internals. If Instagram changes its site, these are the lines to revisit.
   const API = {
@@ -106,6 +110,8 @@
 
   // --- storage: extension storage when it exists, otherwise the site's localStorage
   const cs = (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) ? chrome.storage.local : null;
+  // Where the script runs; the userscript looks like the extension except for the missing extension storage.
+  const RUNTIME = HOST === 'android' ? 'android' : HOST === 'bookmarklet' ? 'bookmarklet' : cs ? 'extension' : 'userscript';
   function storageGet(keys) {
     return new Promise((resolve) => {
       if (cs) {
@@ -142,6 +148,11 @@
   const actStoreKey = (uid) => 'fbc.actions.' + uid;
   const logStoreKey = (uid) => 'fbc.log.' + uid;
   const pendStoreKey = (uid) => 'fbc.pending.' + uid;
+  const datesStoreKey = (uid) => 'fbc.dates.' + uid;
+  // Automatic check: when the last one is older than this, a few seconds after the page loads.
+  const AUTO = { maxAgeMs: 3 * 86400000, delayMs: 4000 };
+  // Update notice: GitHub's latest release, asked at most once a day.
+  const UPDATE = { everyMs: 86400000 };
   const LOG_CAP = 500;
   // Counts of other accounts, shared by every logged-in account: username -> { fw, fg, at }.
   const COUNTS_KEY = 'fbc.counts';
@@ -300,12 +311,14 @@
     changes: { label: 'tileHistory', title: 'titleHistory', empty: '' },
   };
   const freshActions = () => ({ times: [], pausedUntil: 0, warned: false });
-  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), loops: new Map(), react: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0, countsPausedUntil: 0 };
+  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), loops: new Map(), react: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0, countsPausedUntil: 0, dates: null, autoCheck: false, upd: { at: 0, seen: '', rel: null } };
   const live = { following: 0, followers: 0 };
   const ui = {};
   // Small preferences, remembered across visits: language, panel width, and the pause after Instagram asks us to slow down.
   const UI_KEY = 'fbc.ui';
-  function saveUi() { storageSet({ [UI_KEY]: { lang, width: state.width, cooldownUntil: state.cooldownUntil, countsPausedUntil: state.countsPausedUntil } }); }
+  function saveUi() { storageSet({ [UI_KEY]: { lang, width: state.width, cooldownUntil: state.cooldownUntil, countsPausedUntil: state.countsPausedUntil, autoCheck: state.autoCheck, upd: state.upd } }); }
+  let prefsLoaded;
+  const prefsReady = new Promise((resolve) => { prefsLoaded = resolve; }); // the automatic check waits for the settings
   const WIDTH = { def: 640, min: 380, max: 1100, narrowBelow: 560 };
   function applyWidth(w) {
     const cap = Math.min(WIDTH.max, window.innerWidth || WIDTH.max);
@@ -352,6 +365,7 @@
     ui.rel = h('button', { class: 'rel', type: 'button', hidden: true, onclick: () => recheckRel() }, ui.relDot, ui.relName, ui.relText);
     ui.fabwrap = h('div', { class: 'fabwrap' }, ui.rel, ui.fab);
     ui.me = h('span', { class: 'me' });
+    ui.settingsBtn = h('button', { class: 'icon gear', type: 'button', onclick: () => toggleSettings() }, '⚙');
     ui.langBtn = h('button', { class: 'lang', type: 'button', onclick: () => setLang(lang === 'ar' ? 'en' : 'ar') });
     ui.close = h('button', { class: 'icon', type: 'button', onclick: () => toggle(false) }, '×');
     ui.check = h('button', { class: 'btn primary', type: 'button', onclick: () => startCheck() });
@@ -385,7 +399,7 @@
     ui.share = h('button', { class: 'btn small', type: 'button', onclick: () => openShareCard() });
     ui.kindOpts = ['all', 'verified', 'notVerified', 'private', 'public'].map((v) => h('option', { value: v }));
     ui.kindFilter = h('select', { class: 'field sel', onchange: () => { state.kind = ui.kindFilter.value; renderList(); } }, ui.kindOpts);
-    ui.sortOpts = ['name', 'followers', 'ratio'].map((v) => h('option', { value: v }));
+    ui.sortOpts = ['name', 'followers', 'ratio', 'since'].map((v) => h('option', { value: v }));
     ui.sortSel = h('select', { class: 'field sel', onchange: () => { state.sort = ui.sortSel.value; renderList(); } }, ui.sortOpts);
     ui.countsBtn = h('button', { class: 'btn small', type: 'button', onclick: () => loadCounts() });
     ui.filterOpts = ['all', 'others', 'gained', 'lost', 'you_followed', 'you_unfollowed', 'deactivated', 'reactivated'].map((v) => h('option', { value: v }));
@@ -413,6 +427,26 @@
     ui.pendFile = h('input', { type: 'file', accept: '.json,.html,.htm,.txt,application/json,text/html,text/plain', hidden: true, onchange: () => importPendingFile() });
     ui.pendImport = h('button', { class: 'btn small', type: 'button', onclick: () => ui.pendFile.click() });
     ui.pend = h('div', { class: 'prot', hidden: true }, ui.pendHint, h('div', { class: 'toolbar' }, ui.pendImport, ui.pendFile));
+    // Settings: the automatic check, the app's reminder, and the export import for exact follow dates.
+    ui.settingsTitle = h('div', { class: 'stitle' });
+    ui.autoCheck = h('input', { type: 'checkbox', onchange: () => { state.autoCheck = ui.autoCheck.checked; saveUi(); maybeAutoCheck(); } });
+    ui.autoCheckText = h('span');
+    ui.reminder = h('input', { type: 'checkbox', onchange: () => setReminder(ui.reminder.checked) });
+    ui.reminderText = h('span');
+    const app = hostApp();
+    ui.reminderWrap = h('label', { class: 'chk', hidden: !(app && typeof app.setReminder === 'function') }, ui.reminder, ui.reminderText);
+    if (app && typeof app.reminderEnabled === 'function') { try { ui.reminder.checked = app.reminderEnabled() !== false; } catch (e) { ui.reminder.checked = true; } }
+    ui.datesHint = h('div', { class: 'hint' });
+    ui.datesFile = h('input', { type: 'file', accept: '.zip,.json,.html,.htm,application/zip,application/x-zip-compressed,application/json,text/html', hidden: true, onchange: () => importDatesFile() });
+    ui.datesImport = h('button', { class: 'btn small', type: 'button', onclick: () => ui.datesFile.click() });
+    ui.datesStatus = h('div', { class: 'hint' });
+    ui.picStatus = h('div', { class: 'hint', hidden: true });
+    ui.settings = h('div', { class: 'settings', hidden: true }, ui.settingsTitle, h('label', { class: 'chk' }, ui.autoCheck, ui.autoCheckText), ui.reminderWrap, ui.datesHint, h('div', { class: 'toolbar' }, ui.datesImport, ui.datesFile), ui.datesStatus, ui.picStatus);
+    // Update notice: shown when GitHub's latest release is newer than what runs here.
+    ui.updText = h('span', { class: 'updtext' });
+    ui.updGet = h('button', { class: 'btn small primary', type: 'button', onclick: () => openUpdate() });
+    ui.updLater = h('button', { class: 'btn small', type: 'button', onclick: () => dismissUpdate() });
+    ui.update = h('div', { class: 'update', hidden: true }, ui.updText, ui.updGet, ui.updLater);
     ui.list = h('div', { class: 'list' });
     ui.empty = h('div', { class: 'empty', hidden: true });
     ui.notice = h('div', { class: 'notice', hidden: true });
@@ -428,8 +462,10 @@
     ui.body = h('div', { class: 'body' }, ui.results, ui.empty);
     ui.drawer = h('section', { class: 'drawer', role: 'dialog', 'aria-label': 'Follow Back Checker', hidden: true },
       ui.grip,
-      h('header', { class: 'head' }, h('div', { class: 'headl' }, h('span', { class: 'title' }, 'Follow Back Checker'), ui.me), h('div', { class: 'headr' }, ui.langBtn, ui.close)),
+      h('header', { class: 'head' }, h('div', { class: 'headl' }, h('span', { class: 'title' }, 'Follow Back Checker'), ui.me), h('div', { class: 'headr' }, ui.settingsBtn, ui.langBtn, ui.close)),
       h('div', { class: 'controls' }, ui.check, ui.cancel, ui.status),
+      ui.settings,
+      ui.update,
       ui.progress,
       ui.error,
       ui.body,
@@ -458,6 +494,12 @@
       if (typeof prefs.cooldownUntil === 'number' && prefs.cooldownUntil > Date.now()) state.cooldownUntil = prefs.cooldownUntil;
       if (typeof prefs.countsPausedUntil === 'number' && prefs.countsPausedUntil > Date.now()) state.countsPausedUntil = prefs.countsPausedUntil;
       if ((prefs.lang === 'ar' || prefs.lang === 'en') && prefs.lang !== lang) setLang(prefs.lang, true);
+      state.autoCheck = typeof prefs.autoCheck === 'boolean' ? prefs.autoCheck : autoCheckDefault(HOST);
+      ui.autoCheck.checked = state.autoCheck;
+      const upd = prefs.upd && typeof prefs.upd === 'object' ? prefs.upd : {};
+      state.upd = { at: Number(upd.at) || 0, seen: typeof upd.seen === 'string' ? upd.seen : '', rel: upd.rel && typeof upd.rel === 'object' ? upd.rel : null };
+      prefsLoaded();
+      checkForUpdate();
     });
   }
   // Every static label, in the current language; dynamic text is rebuilt by applySnapshot().
@@ -468,6 +510,18 @@
     ui.fabwrap.setAttribute('dir', dir);
     ui.fab.textContent = t('fab');
     ui.langBtn.textContent = t('langToggle');
+    ui.settingsBtn.title = t('settings');
+    ui.settingsBtn.setAttribute('aria-label', t('settings'));
+    ui.settingsTitle.textContent = t('settings');
+    ui.autoCheckText.textContent = t('autoCheck', { d: Math.round(AUTO.maxAgeMs / 86400000) });
+    ui.reminderText.textContent = t('reminder');
+    ui.datesHint.textContent = t('datesHint');
+    ui.datesImport.textContent = t('datesImport');
+    ui.updGet.textContent = t('updGet');
+    ui.updLater.textContent = t('updLater');
+    updateDatesStatus();
+    updatePicStatus();
+    showUpdate();
     ui.close.setAttribute('aria-label', t('close'));
     ui.check.textContent = t('checkNow');
     ui.cancel.textContent = t('cancel');
@@ -484,7 +538,7 @@
     ui.lbShowNameText.textContent = t('showName');
     const kindKeys = ['kindAll', 'kindVerified', 'kindNotVerified', 'kindPrivate', 'kindPublic'];
     ui.kindOpts.forEach((o, i) => { o.textContent = t(kindKeys[i]); });
-    const sortKeys = ['sortName', 'sortFollowers', 'sortRatio'];
+    const sortKeys = ['sortName', 'sortFollowers', 'sortRatio', 'sortSince'];
     ui.sortOpts.forEach((o, i) => { o.textContent = t(sortKeys[i]); });
     ui.countsBtn.title = t('loadCountsTitle', { n: COUNTS.max });
     if (!state.countsRun) ui.countsBtn.textContent = t('loadCounts');
@@ -853,6 +907,7 @@
     const open = typeof force === 'boolean' ? force : !state.open;
     state.open = open;
     if (open) { syncTheme(); applyWidth(state.width); }
+    if (open && !state.running) ui.fab.textContent = t('fab'); // the result shown after an automatic check has been seen
     ui.drawer.hidden = !open;
     ui.fabwrap.hidden = open;
   }
@@ -1042,14 +1097,34 @@
     }
     downloadText(name, 'text/csv', '﻿' + toCsv(rows));
   }
-  function avatarNode(r) {
-    if (r.pic) {
-      const img = h('img', { class: 'avatar', src: r.pic, alt: '', loading: 'lazy', onclick: () => openLightbox(r) });
-      // Instagram's picture links expire after a while; fall back to the first letter.
-      img.addEventListener('error', () => img.replaceWith(h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase())));
-      return img;
+  // Avatars load when their row comes into view: the panel scrolls inside its own box, so the browser's
+  // own lazy loading is not relied on. A failed load gets one more try before the first letter stands in,
+  // and the failures are counted for the Settings box, since a phone cannot show its console.
+  const pics = { failed: 0, host: '' };
+  const avatarWatch = typeof IntersectionObserver === 'function' ? new IntersectionObserver((entries) => {
+    for (const en of entries) {
+      if (!en.isIntersecting) continue;
+      avatarWatch.unobserve(en.target);
+      if (en.target.dataset.src) { en.target.src = en.target.dataset.src; delete en.target.dataset.src; }
     }
-    return h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase());
+  }, { rootMargin: '400px' }) : null;
+  function avatarNode(r) {
+    if (!r.pic) return h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase());
+    const img = h('img', { class: 'avatar', alt: '', onclick: () => openLightbox(r) });
+    let retried = false;
+    img.addEventListener('error', () => {
+      if (!retried) { retried = true; setTimeout(() => { img.src = r.pic; }, 1500); return; }
+      pics.failed++;
+      if (!pics.host) { try { pics.host = new URL(r.pic).host; } catch (e) { pics.host = '?'; } }
+      img.replaceWith(h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase()));
+      if (pics.failed === 1 || pics.failed % 25 === 0) updatePicStatus();
+    });
+    if (avatarWatch) { img.dataset.src = r.pic; avatarWatch.observe(img); } else img.src = r.pic;
+    return img;
+  }
+  function updatePicStatus() {
+    ui.picStatus.hidden = !pics.failed;
+    if (pics.failed) ui.picStatus.textContent = t('picFail', { n: num(pics.failed), host: pics.host });
   }
   function rowNode(r, withCheck) {
     const row = h('div', { class: 'row' + (withCheck && isDone(r.u) ? ' done' : '') });
@@ -1065,7 +1140,10 @@
     row.append(avatarNode(r));
     row.append(h('div', { class: 'who' },
       h('a', { class: 'handle', href: 'https://www.instagram.com/' + encodeURIComponent(r.u) + '/', target: '_blank', rel: 'noopener noreferrer' }, '@' + r.u, h('span', { class: 'arrow' }, '↗')),
-      r.name ? h('div', { class: 'name', title: r.name }, r.name) : null));
+      r.name ? h('div', { class: 'name', title: r.name }, r.name) : null,
+      sinceNode(r.u)));
+    const acts = h('span', { class: 'acts' });
+    row.acts = acts; // every button of the row goes in here, so they wrap together (see actsOf)
     if (r.ver) row.append(h('span', { class: 'tag ver' }, t('verifiedTag')));
     if (r.priv) row.append(h('span', { class: 'tag' }, t('privateTag')));
     const cnt = state.tab !== 'changes' ? state.counts[r.u] : null;
@@ -1091,7 +1169,7 @@
         ub.textContent = t('unfollowConfirm');
         setTimeout(() => { if (armed && Date.now() - armed >= 3900) { armed = 0; ub.classList.remove('arm'); ub.textContent = t('unfollow'); } }, 4000);
       });
-      row.append(ub);
+      acts.append(ub);
     }
     if (withCheck && state.tab === 'fans' && r.id) {
       // Follow back: the same two-tap arming, spacing and caps as Unfollow.
@@ -1104,7 +1182,7 @@
         fb.textContent = t('unfollowConfirm');
         setTimeout(() => { if (armed && Date.now() - armed >= 3900) { armed = 0; fb.classList.remove('arm'); fb.textContent = t('follow'); } }, 4000);
       });
-      row.append(fb);
+      acts.append(fb);
     }
     if (withCheck) {
       const on = isProtected(r.u);
@@ -1117,15 +1195,22 @@
         applyTiles();
         if (state.tab === 'notback' && now && !state.showProtected) { row.remove(); if (!ui.list.children.length) renderList(); }
       });
-      row.append(pb);
+      acts.append(pb);
     }
     if (withCheck) {
       // The lists come from the last check; this asks Instagram about this one account right now.
       const vb = h('button', { class: 'verify', type: 'button', title: t('verifyTitle') }, t('verify'));
       vb.addEventListener('click', () => verifyRow(r, row, vb));
-      row.append(vb);
+      acts.append(vb);
     }
+    if (acts.childElementCount) row.append(acts);
     return row;
+  }
+  // The buttons a list adds to a row after rowNode() join the same end-of-row group.
+  function actsOf(row) {
+    if (!row.acts) row.acts = h('span', { class: 'acts' });
+    if (row.acts.parentNode !== row) row.append(row.acts);
+    return row.acts;
   }
   async function verifyRow(r, row, btn) {
     if (btn.disabled) return;
@@ -1141,7 +1226,7 @@
       const they = rel.followsYou ? t('liveFollowsYou') : rel.theyRequested ? t('liveTheyRequested') : t('liveNotFollowsYou');
       const you = rel.youFollow ? t('liveYouFollow') : rel.youRequested ? t('liveYouRequested') : t('liveYouNot');
       let chip = row.querySelector('.chip.live');
-      if (!chip) { chip = h('span', { class: 'chip live' }); row.append(chip); }
+      if (!chip) { chip = h('span', { class: 'chip live' }); row.insertBefore(chip, row.acts && row.acts.parentNode === row ? row.acts : null); }
       chip.textContent = t('liveChip', { a: they, b: you });
       chip.classList.toggle('good', !!(rel.followsYou && rel.youFollow));
     } catch (e) {
@@ -1159,7 +1244,7 @@
     if ((state.tab === 'notback' || state.tab === 'fans') && state.onlyLeft) rows = rows.filter((r) => state.left.has(r.u));
     if (state.hideDone) rows = rows.filter((r) => !isDone(r.u));
     if (state.kind !== 'all') rows = rows.filter((r) => matchesKind(r, state.kind));
-    return sortRows(rows, state.sort, state.counts);
+    return sortRows(rows, state.sort, state.counts, (u) => sinceOf(state.dates, state.tab === 'fans' ? 'followers' : 'following', u));
   }
   function renderProtected() {
     ui.listTitle.textContent = t('protectedTitle');
@@ -1167,7 +1252,7 @@
     ui.protList.replaceChildren();
     for (const u of names) {
       const row = rowNode(lookupRecord(u) || { u, name: '', priv: false, ver: false, pic: '' }, false);
-      row.append(h('button', { class: 'verify', type: 'button', onclick: () => { setProtected(u, false); applyTiles(); renderList(); } }, t('remove')));
+      actsOf(row).append(h('button', { class: 'verify', type: 'button', onclick: () => { setProtected(u, false); applyTiles(); renderList(); } }, t('remove')));
       ui.protList.append(row);
     }
     ui.protList.hidden = names.length === 0;
@@ -1184,8 +1269,7 @@
       row.append(h('span', { class: 'chip' }, t('pendingChip', { d: fmtMD(p.ts) })));
       const sb = h('button', { class: 'verify', type: 'button', title: t('stillPendingTitle') }, t('stillPending'));
       sb.addEventListener('click', () => checkPendingRow(p, row, sb));
-      row.append(sb);
-      row.append(armedButton('unf', t('cancelReq'), t('cancelTitle'), (btn) => cancelRow(p, row, btn)));
+      actsOf(row).append(sb, armedButton('unf', t('cancelReq'), t('cancelTitle'), (btn) => cancelRow(p, row, btn)));
       ui.list.append(row);
     }
     ui.list.hidden = rows.length === 0;
@@ -1200,7 +1284,7 @@
       const row = rowNode(Object.assign({ u: e.u, name: e.name, priv: e.priv, ver: false, pic: e.pic || '', id: e.id }, lookupRecord(e.u) || {}, { id: e.id || (lookupRecord(e.u) || {}).id || '' }), false);
       row.append(h('span', { class: 'chip ' + (e.type === 'unfollow' || e.type === 'cancel' ? 'warn' : 'good') }, t(ACT_KEY[e.type] || 'actFollow', { d: fmtWhen(e.at) })));
       if (e.undone) row.append(h('span', { class: 'chip muted' }, t('undone', { d: fmtWhen(e.undone) })));
-      else if (UNDO[e.type]) row.append(armedButton('unf undo', t('undo'), t('undoTitle'), (btn) => undoRow(e, row, btn)));
+      else if (UNDO[e.type]) actsOf(row).append(armedButton('unf undo', t('undo'), t('undoTitle'), (btn) => undoRow(e, row, btn)));
       ui.list.append(row);
     }
     ui.list.hidden = rows.length === 0;
@@ -1437,7 +1521,8 @@
     else fallback();
   }
 
-  async function startCheck() {
+  // auto: started by the panel itself (see maybeAutoCheck); the button at the bottom then carries the result.
+  async function startCheck(auto) {
     if (state.running) return;
     const uid = cookie('ds_user_id');
     if (uid !== state.uid) await loadAccount(uid);
@@ -1447,20 +1532,27 @@
     ui.check.disabled = true;
     ui.cancel.hidden = false;
     ui.error.hidden = true;
+    if (auto) ui.fab.textContent = t('fabChecking');
     showProgress({ phase: 'info' });
     try {
       const snap = await runCheck(state.ctl, showProgress);
       if (state.uid !== uid || snap.uid !== uid) throw new Cancelled(); // the account changed mid-check; never mix results
       snap.me = carryMe(snap, state.snap); // the account-info request can be throttled; keep the name we already know
       const knownEvents = state.hist && Array.isArray(state.hist.events) ? state.hist.events : [];
-      state.hist = appendHistory(state.hist, pointFrom(snap), eventsFrom(diff(state.snap, snap), snap.at, goneSet(knownEvents)), HIST_CAPS);
+      const events = eventsFrom(diff(state.snap, snap), snap.at, goneSet(knownEvents));
+      state.hist = appendHistory(state.hist, pointFrom(snap), events, HIST_CAPS);
       state.prev = state.snap;
       state.snap = snap;
-      await storageSet({ [acctStoreKey(uid)]: { last: snap, prev: state.prev }, [histStoreKey(uid)]: state.hist });
+      noteDates(events, snap.at);
+      await storageSet({ [acctStoreKey(uid)]: { last: snap, prev: state.prev }, [histStoreKey(uid)]: state.hist, [datesStoreKey(uid)]: state.dates });
       state.tab = 'notback';
       applySnapshot();
       toast(t('toastChecked', { a: num(snap.following.length), b: num(snap.followers.length) }));
+      const app = hostApp();
+      if (app && typeof app.noteCheck === 'function') { try { app.noteCheck(snap.at); } catch (e) { /* older app build */ } }
+      if (auto) ui.fab.textContent = t('fabResult', { g: num(events.filter((e) => e.type === 'gained').length), l: num(events.filter((e) => e.type === 'lost').length) });
     } catch (e) {
+      if (auto) ui.fab.textContent = t('fab');
       if (e instanceof Cancelled) toast(t('toastCancelled'));
       else showError(e && e.message ? e.message : t('errGeneric'));
     } finally {
@@ -1498,13 +1590,13 @@
   async function loadAccount(uid) {
     const seq = ++loadSeq;
     state.uid = uid;
-    state.snap = null; state.prev = null; state.done = {}; state.white = {}; state.actions = freshActions(); state.lists = null; state.hist = null; state.log = []; state.pending = [];
+    state.snap = null; state.prev = null; state.done = {}; state.white = {}; state.actions = freshActions(); state.lists = null; state.hist = null; state.log = []; state.pending = []; state.dates = null;
     state.tab = 'notback';
     updateProtectedBtn();
     updateSideBtns();
     applySnapshot();
     if (!uid) return;
-    const r = await storageGet([acctStoreKey(uid), doneStoreKey(uid), histStoreKey(uid), whiteStoreKey(uid), actStoreKey(uid), logStoreKey(uid), pendStoreKey(uid), COUNTS_KEY, 'fbc', 'fbcDone']);
+    const r = await storageGet([acctStoreKey(uid), doneStoreKey(uid), histStoreKey(uid), whiteStoreKey(uid), actStoreKey(uid), logStoreKey(uid), pendStoreKey(uid), datesStoreKey(uid), COUNTS_KEY, 'fbc', 'fbcDone']);
     if (seq !== loadSeq) return; // another account took over while loading
     let acct = r[acctStoreKey(uid)];
     let done = r[doneStoreKey(uid)];
@@ -1540,7 +1632,16 @@
       state.hist = seeded;
       storageSet({ [histStoreKey(uid)]: seeded });
     }
+    const dates = r[datesStoreKey(uid)];
+    if (dates && typeof dates === 'object' && dates.following && dates.followers) state.dates = dates;
+    else if (state.hist && state.hist.points.length) {
+      // First time with dates: read the whole history once, the first check being the floor.
+      state.dates = applyDateEvents(emptyDates(state.hist.points[0].at), state.hist.events);
+      storageSet({ [datesStoreKey(uid)]: state.dates });
+    }
+    updateDatesStatus();
     applySnapshot();
+    maybeAutoCheck();
   }
   // Instagram can switch accounts without a reload, so follow the login cookie.
   function watchAccount() {
@@ -1779,10 +1880,12 @@
     if (followsYou === has) return;
     if (followsYou) snap.followers.push({ u: r.u, id: r.id, name: r.name || '', priv: !!r.priv, ver: !!r.ver, pic: r.pic || '' });
     else snap.followers = snap.followers.filter((x) => x.u !== r.u);
-    state.hist = appendHistory(state.hist, pointFrom(snap), [{ at: Date.now(), type: followsYou ? 'gained' : 'lost', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
+    const ev = { at: Date.now(), type: followsYou ? 'gained' : 'lost', u: r.u, name: r.name || '', priv: !!r.priv };
+    state.hist = appendHistory(state.hist, pointFrom(snap), [ev], HIST_CAPS);
+    noteDates([ev], snap.at);
     state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
     refreshFlags();
-    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
+    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist, [datesStoreKey(state.uid)]: state.dates });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
     applyTiles();
   }
@@ -1799,10 +1902,12 @@
     const snap = state.snap;
     if (!snap) return;
     snap.following = snap.following.filter((x) => x.u !== r.u);
-    state.hist = appendHistory(state.hist, pointFrom(snap), silent ? [] : [{ at: Date.now(), type: 'you_unfollowed', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
+    const evs = silent ? [] : [{ at: Date.now(), type: 'you_unfollowed', u: r.u, name: r.name || '', priv: !!r.priv }];
+    state.hist = appendHistory(state.hist, pointFrom(snap), evs, HIST_CAPS);
+    noteDates(evs, snap.at);
     state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
     refreshFlags();
-    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
+    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist, [datesStoreKey(state.uid)]: state.dates });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
     applyTiles();
   }
@@ -1834,10 +1939,12 @@
     const snap = state.snap;
     if (!snap || snap.following.some((x) => x.u === r.u)) return;
     snap.following.push({ u: r.u, id: r.id, name: r.name || '', priv: !!r.priv, ver: !!r.ver, pic: r.pic || '' });
-    state.hist = appendHistory(state.hist, pointFrom(snap), silent ? [] : [{ at: Date.now(), type: 'you_followed', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
+    const evs = silent ? [] : [{ at: Date.now(), type: 'you_followed', u: r.u, name: r.name || '', priv: !!r.priv }];
+    state.hist = appendHistory(state.hist, pointFrom(snap), evs, HIST_CAPS);
+    noteDates(evs, snap.at);
     state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
     refreshFlags();
-    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
+    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist, [datesStoreKey(state.uid)]: state.dates });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
     applyTiles();
   }
@@ -1996,7 +2103,7 @@
       const v = await preflight('cancel', p);
       if (v === 'go') {
         let chip = row.querySelector('.chip.live');
-        if (!chip) { chip = h('span', { class: 'chip live' }); row.append(chip); }
+        if (!chip) { chip = h('span', { class: 'chip live' }); row.insertBefore(chip, row.acts && row.acts.parentNode === row ? row.acts : null); }
         chip.textContent = t('pendingStill');
       } else if (v !== 'unknown') renderList();
     } catch (e) {
@@ -2074,6 +2181,152 @@
       sheet.replaceSync('a[href^="intent:"], a[href*="applink.instagram.com"] { display: none !important; }');
       document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
     } catch (e) { /* older WebView: the navigation is blocked by the app anyway */ }
+  }
+
+  // --- settings, follow dates, the automatic check and the update notice
+  function toggleSettings() { ui.settings.hidden = !ui.settings.hidden; }
+  function setReminder(on) {
+    const app = hostApp();
+    if (!app || typeof app.setReminder !== 'function') return;
+    try { app.setReminder(!!on); } catch (e) { /* older app build */ }
+  }
+  const fmtD = (ms) => new Date(ms).toLocaleDateString(locale(), { month: 'short', day: 'numeric', year: 'numeric' });
+  const SINCE_LIST = { notback: 'following', mutual: 'following', protected: 'following', fans: 'followers' };
+  // One line under the name: since when you follow this account (or it follows you), and for how long.
+  function sinceNode(u) {
+    const list = SINCE_LIST[state.tab];
+    if (!list) return null;
+    const s = sinceOf(state.dates, list, u);
+    if (!s) return null;
+    if (s.before) return h('div', { class: 'since', title: t('sinceApprox') }, t('sinceBefore', { d: fmtD(s.at) }));
+    const days = Math.max(0, Math.round((Date.now() - s.at) / 86400000));
+    return h('div', { class: 'since', title: t(s.exact ? 'sinceExact' : 'sinceApprox') }, t(list === 'followers' ? 'sinceFollowsYou' : 'sinceFollowing', { d: fmtD(s.at), n: num(days) }));
+  }
+  function updateDatesStatus() {
+    const d = state.dates;
+    if (!d || !d.importedAt) { ui.datesStatus.textContent = t('datesNone'); return; }
+    const exact = (m) => Object.values(m || {}).filter((e) => e && e.x).length;
+    ui.datesStatus.textContent = t('datesStatus', { d: fmtD(d.importedAt), a: num(exact(d.following)), b: num(exact(d.followers)) });
+  }
+  // Keeps the follow dates in step with the history. at: the check's date, the floor when there was none before.
+  function noteDates(events, at) {
+    if (!state.dates) state.dates = emptyDates(at || Date.now());
+    state.dates = applyDateEvents(state.dates, events);
+    updateDatesStatus();
+  }
+  // Reads the list files out of an export zip through File.slice, so the media inside is never loaded.
+  async function readExportZip(file) {
+    const size = file.size;
+    const tail = new Uint8Array(await file.slice(Math.max(0, size - 65557), size).arrayBuffer());
+    const e = zipFindEocd(tail, size);
+    if (!e) return null;
+    const cd = new Uint8Array(await file.slice(e.cdOffset, e.cdOffset + e.cdSize).arrayBuffer());
+    const out = [];
+    for (const c of exportListEntries(zipCentral(cd, e.count))) {
+      const at = zipDataStart(new Uint8Array(await file.slice(c.lho, c.lho + 30).arrayBuffer()));
+      if (at < 0) continue;
+      const data = new Uint8Array(await file.slice(c.lho + at, c.lho + at + c.csize).arrayBuffer());
+      out.push({ name: c.name, text: await zipText({ method: c.method, data }) });
+    }
+    return out;
+  }
+  async function importDatesFile() {
+    const f = ui.datesFile.files && ui.datesFile.files[0];
+    ui.datesFile.value = '';
+    if (!f || !state.uid) return;
+    try {
+      let files;
+      const head = new Uint8Array(await f.slice(0, 2).arrayBuffer());
+      if (head[0] === 0x50 && head[1] === 0x4b) {
+        if (typeof DecompressionStream !== 'function') { toast(t('toastZipOld')); return; }
+        files = await readExportZip(f);
+        if (!files) { toast(t('toastDatesNone')); return; }
+      } else {
+        files = [{ name: f.name, text: await f.text() }];
+      }
+      let a = 0, b = 0, unknown = false;
+      for (const file of files) {
+        const rows = parsePending(file.text);
+        if (!rows.length) continue;
+        const kind = guessListKind(file.name, rows, state.snap);
+        if (!kind) { unknown = true; continue; }
+        const res = importDates(state.dates || emptyDates(state.snap ? state.snap.at : 0), rows, kind, Date.now());
+        state.dates = res.dates;
+        if (kind === 'followers') b += res.added; else a += res.added;
+      }
+      if (!a && !b) { toast(t(unknown ? 'toastDatesWhich' : 'toastDatesNone')); return; }
+      await storageSet({ [datesStoreKey(state.uid)]: state.dates });
+      updateDatesStatus();
+      renderList();
+      toast(t('toastDates', { a: num(a), b: num(b) }));
+    } catch (e) {
+      toast(t('toastDatesNone'));
+    }
+  }
+  // The check that starts by itself: once per page load and account, a few seconds after the panel is ready.
+  const autoRan = new Set();
+  async function maybeAutoCheck() {
+    await prefsReady;
+    const uid = state.uid;
+    if (!uid || uid !== cookie('ds_user_id')) return;
+    const due = shouldAutoCheck({ enabled: state.autoCheck, lastAt: state.snap ? state.snap.at : 0, now: Date.now(), running: state.running, cooldownUntil: state.cooldownUntil, maxAgeMs: AUTO.maxAgeMs, ranAlready: autoRan.has(uid) });
+    if (!due) return;
+    autoRan.add(uid);
+    await sleep(AUTO.delayMs);
+    if (state.uid !== uid || state.running) return;
+    startCheck(true);
+  }
+  // The latest release: the app keeps a copy (its own request), the extension asks its background script.
+  // Instagram's page rules block that request from the page itself, so the userscript and bookmarklet skip it.
+  function fetchRelease() {
+    if (RUNTIME === 'android') {
+      const app = hostApp();
+      if (!app || typeof app.latestRelease !== 'function') return Promise.resolve(null);
+      try { const text = app.latestRelease(); return Promise.resolve(text ? JSON.parse(text) : null); } catch (e) { return Promise.resolve(null); }
+    }
+    if (RUNTIME === 'extension') {
+      return new Promise((resolve) => {
+        try { chrome.runtime.sendMessage({ type: 'fbc-release' }, (r) => { void chrome.runtime.lastError; resolve(r && r.ok ? r.release : null); }); } catch (e) { resolve(null); }
+      });
+    }
+    return Promise.resolve(null);
+  }
+  function appVersion() {
+    const app = hostApp();
+    if (!app || typeof app.appVersion !== 'function') return '';
+    try { return String(app.appVersion() || ''); } catch (e) { return ''; }
+  }
+  async function checkForUpdate() {
+    if (RUNTIME !== 'android' && RUNTIME !== 'extension') return;
+    const now = Date.now();
+    if (RUNTIME === 'extension' && now - state.upd.at < UPDATE.everyMs) { showUpdate(); return; }
+    const raw = await fetchRelease();
+    const rel = raw ? parseRelease(raw, { host: RUNTIME, script: SCRIPT_VERSION, app: appVersion() }) : null;
+    state.upd = { at: now, seen: state.upd.seen, rel: rel || (RUNTIME === 'android' ? null : state.upd.rel) };
+    saveUi();
+    showUpdate();
+  }
+  function showUpdate() {
+    const rel = state.upd && state.upd.rel;
+    const show = !!(rel && rel.newer && rel.get && state.upd.seen !== rel.tag);
+    ui.update.hidden = !show;
+    if (show) ui.updText.textContent = t('updNew', { v: rel.version });
+  }
+  function openUpdate() {
+    const rel = state.upd && state.upd.rel;
+    if (!rel || !rel.get) return;
+    const app = hostApp();
+    if (app && typeof app.openExternal === 'function') { try { if (app.openExternal(rel.get)) return; } catch (e) { /* fall through */ } }
+    const a = h('a', { href: rel.get, target: '_blank', rel: 'noopener noreferrer' });
+    root.append(a);
+    a.click();
+    a.remove();
+  }
+  function dismissUpdate() {
+    const rel = state.upd && state.upd.rel;
+    state.upd = Object.assign({}, state.upd, { seen: rel ? rel.tag : state.upd.seen });
+    saveUi();
+    ui.update.hidden = true;
   }
 
   // --- boot

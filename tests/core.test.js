@@ -338,6 +338,30 @@ test('diff tells a deactivated account apart from an unfollow', () => {
   assert.equal(evs2.filter((e) => e.u === 'newmutual' && e.type !== 'reactivated').length, 0);
 });
 
+test('a known-away account that returns in one list only is back, then unfollowed or was unfollowed', () => {
+  const by = (evs, type) => evs.filter((e) => e.type === type).map((e) => e.u).sort().join(',');
+  const prev = { at: 1, me: 'me', following: rows('x'), followers: rows('y') };
+  // d came back to both lists and then unfollowed you before this check: it is in following only now.
+  const last = { at: 2, me: 'me', following: rows('x', 'd'), followers: rows('y') };
+  const evs = core.eventsFrom(core.diff(prev, last), 2, new Set(['d']));
+  assert.equal(by(evs, 'reactivated'), 'd');
+  assert.equal(by(evs, 'lost'), 'd', 'it unfollowed you after coming back');
+  assert.equal(by(evs, 'you_followed'), '', 'never recorded as your own follow');
+  assert.equal(core.goneSet([{ at: 1, type: 'deactivated', u: 'd' }].concat(evs)).size, 0);
+  assert.deepEqual(core.reactivations([{ at: 1, type: 'deactivated', u: 'd' }].concat(evs)).get('d'), { goneAt: 1, backAt: 2 });
+  assert.equal(core.lostSince(evs).get('d'), 2);
+  // The mirror: back in followers only means you unfollowed it after it came back.
+  const last2 = { at: 3, me: 'me', following: rows('x'), followers: rows('y', 'd') };
+  const evs2 = core.eventsFrom(core.diff(prev, last2), 3, new Set(['d']));
+  assert.equal(by(evs2, 'reactivated'), 'd');
+  assert.equal(by(evs2, 'you_unfollowed'), 'd');
+  assert.equal(by(evs2, 'gained'), '');
+  // An unknown account in one list is still a plain follow.
+  const evs3 = core.eventsFrom(core.diff(prev, last), 2, new Set());
+  assert.equal(by(evs3, 'you_followed'), 'd');
+  assert.equal(by(evs3, 'reactivated'), '');
+});
+
 test('goneSet, reactivations and groupEvents follow the new event types', () => {
   const evs = [
     { at: 1, type: 'deactivated', u: 'a', name: '', priv: false },
@@ -378,4 +402,143 @@ test('goneSet, reactivations and reclassifyEvents survive damaged entries', () =
   assert.equal(core.reactivations(junk).size, 0);
   assert.deepEqual(core.reclassifyEvents(junk.concat([good])), [good], 'damaged entries are dropped, which counts as a change');
   assert.equal(core.reclassifyEvents([good])[0], good, 'a clean history comes back as is');
+});
+
+// A small zip built by hand (local headers, central directory, end record), like a real export.
+function zipOf(entries) {
+  const zlib = require('node:zlib');
+  const locals = [], centrals = [];
+  let off = 0;
+  for (const e of entries) {
+    const name = Buffer.from(e.name, 'utf8'), raw = Buffer.from(e.text, 'utf8');
+    const data = e.deflate ? zlib.deflateRawSync(raw) : raw;
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt16LE(e.deflate ? 8 : 0, 8);
+    lh.writeUInt32LE(data.length, 18); lh.writeUInt32LE(raw.length, 22); lh.writeUInt16LE(name.length, 26);
+    const ch = Buffer.alloc(46);
+    ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6); ch.writeUInt16LE(e.deflate ? 8 : 0, 10);
+    ch.writeUInt32LE(data.length, 20); ch.writeUInt32LE(raw.length, 24); ch.writeUInt16LE(name.length, 28); ch.writeUInt32LE(off, 42);
+    locals.push(lh, name, data); centrals.push(ch, name);
+    off += lh.length + name.length + data.length;
+  }
+  const cd = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(entries.length, 8); eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(off, 16);
+  return Buffer.concat([...locals, cd, eocd]);
+}
+
+test('zipEntries and zipText read stored and deflated entries of an export zip', async () => {
+  const following = JSON.stringify({ relationships_following: [{ title: 'alice', string_list_data: [{ href: 'https://www.instagram.com/alice', value: 'alice', timestamp: 1700000000 }] }] });
+  const followers = JSON.stringify([{ title: '', string_list_data: [{ href: 'https://www.instagram.com/bob', value: 'bob', timestamp: 1600000000 }] }]);
+  const zip = zipOf([
+    { name: 'connections/followers_and_following/following.json', text: following, deflate: true },
+    { name: 'connections/followers_and_following/followers_1.json', text: followers, deflate: false },
+    { name: 'connections/followers_and_following/pending_follow_requests.json', text: '[]', deflate: true },
+    { name: '__MACOSX/connections/followers_and_following/._following.json', text: 'junk', deflate: false },
+    { name: 'media/posts/1.jpg', text: 'not a list', deflate: false },
+  ]);
+  const entries = core.zipEntries(new Uint8Array(zip));
+  assert.equal(entries.length, 5);
+  const lists = core.exportListEntries(entries).map((e) => e.name.split('/').pop()).sort();
+  assert.deepEqual(lists, ['followers_1.json', 'following.json']);
+  const texts = {};
+  for (const e of core.exportListEntries(entries)) texts[e.name.split('/').pop()] = await core.zipText(e);
+  assert.equal(texts['following.json'], following, 'deflated entry');
+  assert.equal(texts['followers_1.json'], followers, 'stored entry');
+  assert.deepEqual(core.parsePending(texts['following.json']), [{ u: 'alice', ts: 1700000000000 }]);
+  assert.deepEqual(core.zipEntries(new Uint8Array([1, 2, 3])), [], 'not a zip');
+  assert.deepEqual(core.zipEntries(Buffer.from('PK\u0003\u0004 truncated garbage that is long enough')), []);
+  // The pieces a page uses to read a big zip through File.slice: the tail, the directory, one local header.
+  const e = core.zipFindEocd(zip.subarray(zip.length - 40), zip.length);
+  assert.equal(e.count, 5);
+  assert.equal(core.zipCentral(zip.subarray(e.cdOffset, e.cdOffset + e.cdSize), e.count).length, 5);
+  assert.equal(core.zipDataStart(zip.subarray(0, 30)), 30 + 'connections/followers_and_following/following.json'.length);
+  assert.equal(core.zipDataStart(new Uint8Array(30)), -1);
+  assert.equal(core.zipFindEocd(zip.subarray(zip.length - 40), 10), null, 'directory beyond the file');
+});
+
+test('follow dates: from the checks, from the export, and what a row shows', () => {
+  const ev = (at, type, u) => ({ at, type, u, name: '', priv: false });
+  let d = core.applyDateEvents(core.emptyDates(100), [ev(200, 'you_followed', 'a'), ev(200, 'gained', 'b'), ev(300, 'you_followed', 'c'), ev(400, 'you_unfollowed', 'a'), ev(400, 'lost', 'b'), ev(500, 'deactivated', 'c'), null]);
+  assert.deepEqual(d.following, { c: { at: 300, x: false } }, 'unfollowed accounts drop out, deactivation keeps the date');
+  assert.deepEqual(d.followers, {});
+  assert.equal(d.floor, 100);
+  assert.deepEqual(core.sinceOf(d, 'following', 'c'), { at: 300, exact: false, before: false });
+  assert.deepEqual(core.sinceOf(d, 'following', 'old'), { at: 100, exact: false, before: true }, 'already there at the first check');
+  assert.equal(core.sinceOf(core.emptyDates(0), 'following', 'old'), null, 'no first check known');
+  assert.equal(core.sinceOf(null, 'following', 'x'), null);
+  const imp = core.importDates(d, [{ u: 'c', ts: 250 }, { u: 'old', ts: 50 }, { u: 'nodate', ts: null }, null], 'following', 999);
+  assert.equal(imp.added, 2);
+  assert.deepEqual(core.sinceOf(imp.dates, 'following', 'c'), { at: 250, exact: true, before: false }, 'the export is exact and wins');
+  assert.deepEqual(core.sinceOf(imp.dates, 'following', 'old'), { at: 50, exact: true, before: false });
+  assert.equal(imp.dates.importedAt, 999);
+  assert.deepEqual(imp.dates.followers, {}, 'the other list is untouched');
+  assert.equal(core.importDates(imp.dates, [], 'followers', 1000).dates.importedAt, 999, 'nothing added, date kept');
+  const later = core.applyDateEvents(imp.dates, [ev(2000, 'you_unfollowed', 'c'), ev(2100, 'you_followed', 'c')]);
+  assert.deepEqual(core.sinceOf(later, 'following', 'c'), { at: 2100, exact: false, before: false }, 'a new follow after the export restarts the clock');
+});
+
+test('guessListKind reads the file name, then the overlap with your lists', () => {
+  const snap = { following: rows('a', 'b', 'c'), followers: rows('c', 'd') };
+  assert.equal(core.guessListKind('following.json', [], null), 'following');
+  assert.equal(core.guessListKind('followers_1.json', [], null), 'followers');
+  assert.equal(core.guessListKind('followers_2.html', [], null), 'followers');
+  assert.equal(core.guessListKind('export.json', [{ u: 'a' }, { u: 'b' }, { u: 'd' }], snap), 'following');
+  assert.equal(core.guessListKind('export.json', [{ u: 'd' }, { u: 'zzz' }], snap), 'followers');
+  assert.equal(core.guessListKind('export.json', [{ u: 'zzz' }], snap), null);
+  assert.equal(core.guessListKind('export.json', [{ u: 'a' }], null), null);
+});
+
+test('sortRows since: longest follow first, undated rows last', () => {
+  const list = rows('new', 'old', 'nodate', 'mid');
+  const since = (u) => ({ new: { at: 300 }, old: { at: 100 }, mid: { at: 200 } }[u] || null);
+  assert.deepEqual(core.sortRows(list, 'since', {}, since).map((r) => r.u), ['old', 'mid', 'new', 'nodate']);
+  assert.deepEqual(core.sortRows(list, 'since', {}, null).map((r) => r.u), ['mid', 'new', 'nodate', 'old'], 'no dates: by name');
+});
+
+test('shouldAutoCheck and autoCheckDefault', () => {
+  const day = 86400000, now = 10 * day;
+  const base = { enabled: true, lastAt: now - 4 * day, now, running: false, cooldownUntil: 0, maxAgeMs: 3 * day, ranAlready: false };
+  assert.equal(core.shouldAutoCheck(base), true);
+  assert.equal(core.shouldAutoCheck(Object.assign({}, base, { lastAt: now - 2 * day })), false, 'recent enough');
+  assert.equal(core.shouldAutoCheck(Object.assign({}, base, { lastAt: 0 })), true, 'never checked');
+  assert.equal(core.shouldAutoCheck(Object.assign({}, base, { enabled: false })), false);
+  assert.equal(core.shouldAutoCheck(Object.assign({}, base, { running: true })), false);
+  assert.equal(core.shouldAutoCheck(Object.assign({}, base, { ranAlready: true })), false);
+  assert.equal(core.shouldAutoCheck(Object.assign({}, base, { cooldownUntil: now + 1000 })), false, 'Instagram asked for a pause');
+  assert.equal(core.shouldAutoCheck(null), false);
+  assert.equal(core.autoCheckDefault('android'), true);
+  assert.equal(core.autoCheckDefault('extension'), false);
+});
+
+test('compareVersions and parseRelease', () => {
+  assert.equal(core.compareVersions('1.10.2', '1.9.9'), 1);
+  assert.equal(core.compareVersions('v1.0.16', '1.0.16'), 0);
+  assert.equal(core.compareVersions('1.0.9', '1.0.16'), -1);
+  assert.equal(core.compareVersions('', '1.0.0'), -1);
+  const rel = {
+    tag_name: 'v1.0.17', html_url: 'https://github.com/devbn3li/follow-back-checker/releases/tag/v1.0.17',
+    body: 'Script version 1.11.0\n\n## What changed', published_at: '2026-10-25T10:00:00Z',
+    assets: [
+      { name: 'FollowCheck-v1.0.17.apk', browser_download_url: 'https://x/apk' },
+      { name: 'follow-back-checker-extension-v1.0.17.zip', browser_download_url: 'https://x/ext' },
+      { name: 'follow-back-checker.user.js', browser_download_url: 'https://x/user' },
+    ],
+  };
+  const android = core.parseRelease(rel, { host: 'android', app: '1.0.16', script: '1.10.1' });
+  assert.equal(android.newer, true);
+  assert.equal(android.get, 'https://x/apk');
+  assert.equal(core.parseRelease(rel, { host: 'android', app: '1.0.17', script: '1.0.0' }).newer, false, 'same APK');
+  assert.equal(core.parseRelease(rel, { host: 'android', app: '', script: '1.0.0' }).newer, false, 'unknown app version');
+  const ext = core.parseRelease(rel, { host: 'extension', script: '1.10.1' });
+  assert.equal(ext.newer, true);
+  assert.equal(ext.get, 'https://x/ext');
+  assert.equal(core.parseRelease(rel, { host: 'extension', script: '1.11.0' }).newer, false);
+  assert.equal(core.parseRelease(Object.assign({}, rel, { body: 'no version line' }), { host: 'extension', script: '0.0.1' }).newer, false, 'release notes without a script version never nag');
+  assert.equal(core.parseRelease(rel, { host: 'bookmarklet', script: '0.0.1' }).newer, false);
+  assert.equal(core.parseRelease(Object.assign({}, rel, { prerelease: true }), { host: 'android', app: '1.0.0' }), null);
+  assert.equal(core.parseRelease(Object.assign({}, rel, { tag_name: 'nightly' }), { host: 'android', app: '1.0.0' }), null);
+  assert.equal(core.parseRelease(null, { host: 'android' }), null);
+  assert.equal(core.parseRelease(Object.assign({}, rel, { assets: [] }), { host: 'android', app: '1.0.0' }).get, rel.html_url, 'no asset: the release page');
 });

@@ -14,7 +14,7 @@ function build() {
   const version = manifest.version;
   const parts = ['styles.js', 'core.js', 'i18n.js', 'content.js'].map((f) => read('extension/' + f));
   const banner = `/* Follow Back Checker ${version}. Built from extension/ by scripts/build.js; do not edit by hand. ${REPO} */\n`;
-  const bundle = banner + parts.join('\n;\n');
+  const bundle = banner + `if (typeof window !== 'undefined') window.FBC_VERSION = '${version}';\n` + parts.join('\n;\n');
   const userscript = [
     '// ==UserScript==',
     '// @name         Follow Back Checker',

@@ -42,10 +42,18 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       - name: Name the APK
         run: cp android/app/build/outputs/apk/release/app-release.apk "FollowCheck-${GITHUB_REF_NAME}.apk"
+      # The panel's update notice reads the script version from the release notes and offers the extension zip.
+      - name: Script version and extension zip
+        run: |
+          echo "SCRIPT_VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+          (cd extension && zip -r "../follow-back-checker-extension-${GITHUB_REF_NAME}.zip" .)
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          body: |
+            Script version ${{ env.SCRIPT_VERSION }}
           files: |
             FollowCheck-*.apk
+            follow-back-checker-extension-*.zip
             dist/follow-back-checker.user.js
             dist/checker.js
