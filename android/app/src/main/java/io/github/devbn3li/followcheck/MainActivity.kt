@@ -1,6 +1,9 @@
 package io.github.devbn3li.followcheck
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.webkit.CookieManager
@@ -11,6 +14,8 @@ import android.webkit.WebViewClient
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -69,7 +74,10 @@ class MainActivity : AppCompatActivity() {
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) { inject(view) }
         }
 
-        // Lets the checker save its CSV/JSON exports into Downloads (window.FollowCheckHost.saveText).
+        // window.FollowCheckHost: saves the checker's exports into Downloads (saveText, saveBase64, saveUrl),
+        // records checks and the reminder setting for the weekly reminder (noteCheck, setReminder,
+        // reminderEnabled), reports the installed version and the latest GitHub release (appVersion,
+        // latestRelease) and opens links in the phone's browser (openExternal).
         web.addJavascriptInterface(HostBridge(this), "FollowCheckHost")
 
         script = ScriptStore.load(this)
@@ -78,6 +86,7 @@ class MainActivity : AppCompatActivity() {
         Thread {
             val fresh = ScriptStore.refresh(this)
             if (fresh != null) script = fresh
+            ReleaseStore.refresh(this)
         }.start()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -85,6 +94,14 @@ class MainActivity : AppCompatActivity() {
                 if (web.canGoBack()) web.goBack() else finish()
             }
         })
+
+        // The weekly reminder: remember the first launch (its week counts from here until the first
+        // check) and keep the daily job scheduled while reminders are on.
+        val prefs = Prefs.of(this)
+        if (prefs.getLong(Prefs.INSTALLED_AT, 0L) <= 0L) {
+            prefs.edit().putLong(Prefs.INSTALLED_AT, System.currentTimeMillis()).apply()
+        }
+        if (prefs.getBoolean(Prefs.REMINDER_ENABLED, true)) ReminderScheduler.ensure(this)
 
         showIntroOnce()
     }
@@ -106,13 +123,30 @@ class MainActivity : AppCompatActivity() {
 
     private fun showIntroOnce() {
         val prefs = getSharedPreferences("followcheck", MODE_PRIVATE)
-        if (prefs.getBoolean("intro_shown", false)) return
+        if (prefs.getBoolean("intro_shown", false)) {
+            askNotificationsOnce()
+            return
+        }
         AlertDialog.Builder(this)
             .setTitle(R.string.intro_title)
             .setMessage(R.string.intro_body)
             .setPositiveButton(R.string.intro_ok) { dialog, _ -> dialog.dismiss() }
-            .setOnDismissListener { prefs.edit().putBoolean("intro_shown", true).apply() }
+            .setOnDismissListener {
+                prefs.edit().putBoolean("intro_shown", true).apply()
+                // The permission prompt comes after the intro, so the two dialogs never overlap.
+                askNotificationsOnce()
+            }
             .show()
+    }
+
+    /** Android 13+ needs the user's permission before the weekly reminder can show; ask one time only. */
+    private fun askNotificationsOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || isFinishing) return
+        val prefs = Prefs.of(this)
+        if (prefs.getBoolean(Prefs.NOTIF_ASKED, false)) return
+        prefs.edit().putBoolean(Prefs.NOTIF_ASKED, true).apply()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -128,5 +162,6 @@ class MainActivity : AppCompatActivity() {
     companion object {
         // The login page, not the landing page that pushes the official app. Logged-in users are sent on to the feed.
         const val HOME = "https://www.instagram.com/accounts/login/"
+        private const val REQUEST_NOTIFICATIONS = 1
     }
 }

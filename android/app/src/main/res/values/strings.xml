@@ -6,4 +6,7 @@
     <string name="intro_ok">Got it</string>
     <string name="saved_to_downloads">Saved %1$s to Downloads</string>
     <string name="saved_to_app_folder">Saved %1$s in the app folder (Android/data)</string>
+    <string name="reminder_channel">Reminders</string>
+    <string name="reminder_title">Time for a follow check</string>
+    <string name="reminder_body">It has been a week since your last check. Open the app and it runs by itself.</string>
 </resources>

@@ -6,4 +6,7 @@
     <string name="intro_ok">تمام</string>
     <string name="saved_to_downloads">اتحفظ %1$s في Downloads</string>
     <string name="saved_to_app_folder">اتحفظ %1$s في مجلد التطبيق (Android/data)</string>
+    <string name="reminder_channel">التذكيرات</string>
+    <string name="reminder_title">وقت فحص المتابعين</string>
+    <string name="reminder_body">بقالك أسبوع من آخر فحص. افتح التطبيق وهو هيفحص لوحده.</string>
 </resources>
