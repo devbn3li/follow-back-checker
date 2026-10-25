@@ -15,7 +15,7 @@
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipText, shouldAutoCheck, autoCheckDefault, parseRelease } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipText, shouldAutoCheck, autoCheckDefault, parseRelease } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -563,8 +563,8 @@
   const lb = { rec: null, url: '', hd: false };
   function openLightbox(rec) {
     if (!rec || !rec.pic) return;
-    lb.rec = rec; lb.url = rec.pic; lb.hd = false; lb.loading = null; lb.card = null;
-    ui.lbImg.src = rec.pic;
+    lb.rec = rec; lb.url = picCandidates(rec.pic)[0] || rec.pic; lb.hd = false; lb.loading = null; lb.card = null;
+    ui.lbImg.src = lb.url;
     ui.lbName.textContent = '@' + rec.u;
     ui.lbFull.hidden = true;
     ui.lbOpt.hidden = true;
@@ -1098,8 +1098,9 @@
     downloadText(name, 'text/csv', '﻿' + toCsv(rows));
   }
   // Avatars load when their row comes into view: the panel scrolls inside its own box, so the browser's
-  // own lazy loading is not relied on. A failed load gets one more try before the first letter stands in,
-  // and the failures are counted for the Settings box, since a phone cannot show its console.
+  // own lazy loading is not relied on. A link that fails is tried on the other picture host (see
+  // picCandidates) before the first letter stands in, and the failures are counted for the Settings box,
+  // since a phone cannot show its console.
   const pics = { failed: 0, host: '' };
   const avatarWatch = typeof IntersectionObserver === 'function' ? new IntersectionObserver((entries) => {
     for (const en of entries) {
@@ -1111,15 +1112,16 @@
   function avatarNode(r) {
     if (!r.pic) return h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase());
     const img = h('img', { class: 'avatar', alt: '', onclick: () => openLightbox(r) });
-    let retried = false;
+    const tries = picCandidates(r.pic);
+    let i = 0;
     img.addEventListener('error', () => {
-      if (!retried) { retried = true; setTimeout(() => { img.src = r.pic; }, 1500); return; }
+      if (++i < tries.length) { img.src = tries[i]; return; }
       pics.failed++;
       if (!pics.host) { try { pics.host = new URL(r.pic).host; } catch (e) { pics.host = '?'; } }
       img.replaceWith(h('span', { class: 'avatar ph' }, (r.u || '?').charAt(0).toUpperCase()));
       if (pics.failed === 1 || pics.failed % 25 === 0) updatePicStatus();
     });
-    if (avatarWatch) { img.dataset.src = r.pic; avatarWatch.observe(img); } else img.src = r.pic;
+    if (avatarWatch) { img.dataset.src = tries[0]; avatarWatch.observe(img); } else img.src = tries[0];
     return img;
   }
   function updatePicStatus() {

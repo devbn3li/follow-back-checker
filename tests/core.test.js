@@ -497,6 +497,20 @@ test('sortRows since: longest follow first, undated rows last', () => {
   assert.deepEqual(core.sortRows(list, 'since', {}, null).map((r) => r.u), ['mid', 'new', 'nodate', 'old'], 'no dates: by name');
 });
 
+test('picCandidates tries the generic picture host when the link points at an ISP cache host', () => {
+  const q = '?stp=dst-jpg_s150x150&_nc_ht=instagram.fcai19-1.fna.fbcdn.net&oh=00_abc&oe=68B0C8DF';
+  const fna = 'https://instagram.fcai19-1.fna.fbcdn.net/v/t51.2885-19/1_n.jpg' + q;
+  assert.deepEqual(core.picCandidates(fna), ['https://scontent.cdninstagram.com/v/t51.2885-19/1_n.jpg' + q, fna], 'generic first, the cache host as fallback, query untouched');
+  const scontent = 'https://scontent-fra3-1.cdninstagram.com/v/t51.2885-19/2_n.jpg?oh=x&oe=y';
+  assert.deepEqual(core.picCandidates(scontent), [scontent, 'https://scontent.cdninstagram.com/v/t51.2885-19/2_n.jpg?oh=x&oe=y'], 'the given link first, the generic host as fallback');
+  const generic = 'https://scontent.cdninstagram.com/v/t51.2885-19/3_n.jpg?oh=x';
+  assert.deepEqual(core.picCandidates(generic), [generic]);
+  assert.deepEqual(core.picCandidates('http://example.com/a.jpg'), ['http://example.com/a.jpg']);
+  assert.deepEqual(core.picCandidates('not a url'), ['not a url']);
+  assert.deepEqual(core.picCandidates(''), []);
+  assert.deepEqual(core.picCandidates(null), []);
+});
+
 test('shouldAutoCheck and autoCheckDefault', () => {
   const day = 86400000, now = 10 * day;
   const base = { enabled: true, lastAt: now - 4 * day, now, running: false, cooldownUntil: 0, maxAgeMs: 3 * day, ranAlready: false };

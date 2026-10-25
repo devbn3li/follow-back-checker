@@ -585,6 +585,24 @@
     return new TextDecoder('utf-8').decode(buf);
   }
 
+  // --- profile pictures. Instagram hands out picture links on ISP-specific cache hosts
+  // (instagram.fXXX-N.fna.fbcdn.net) that only answer from inside that network, so a phone that moves to
+  // another network, or ran the check on another one, gets broken pictures while the site itself (which
+  // mints fresh links on every page) looks fine. The generic host serves the same path with the same
+  // signature. Returns the links to try, in order: the generic host first for a cache-host link.
+  const GENERIC_PIC_HOST = 'scontent.cdninstagram.com';
+  function picCandidates(url) {
+    if (typeof url !== 'string' || !url) return [];
+    let u;
+    try { u = new URL(url); } catch (e) { return [url]; }
+    if (u.protocol !== 'https:') return [url];
+    const generic = new URL(url);
+    generic.host = GENERIC_PIC_HOST;
+    const g = generic.toString();
+    if (g === url) return [url];
+    return /\.fna\.fbcdn\.net$/i.test(u.host) ? [g, url] : [url, g];
+  }
+
   // --- automatic check: on when the setting says so, the last check is older than maxAgeMs (or there is
   // none), nothing runs, Instagram has not asked for a pause, and it has not already run on this page.
   function shouldAutoCheck(s) {
@@ -626,5 +644,5 @@
     return out;
   }
 
-  return { emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipEntries, zipText, shouldAutoCheck, autoCheckDefault, compareVersions, parseRelease, loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
+  return { picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipEntries, zipText, shouldAutoCheck, autoCheckDefault, compareVersions, parseRelease, loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
 });
