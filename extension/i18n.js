@@ -168,6 +168,7 @@
     lbFull: 'Full size',
     lbSave: 'Download image',
     lbFullFailed: 'Could not load the full size: {r}',
+    lbSlow: 'Instagram asked to slow down. Full-size pictures are back after {t}; until then only the small one can be saved.',
     toastImgOpen: 'Opened in a new tab; save it from there.',
   };
 
@@ -332,6 +333,7 @@
     lbFull: 'الحجم الكامل',
     lbSave: 'تحميل الصورة',
     lbFullFailed: 'مقدرناش نجيب الحجم الكامل: {r}',
+    lbSlow: 'إنستجرام طلب نهدّي شوية. الصور الكبيرة هترجع بعد {t}، ولحد ساعتها الصغيرة بس هي اللي بتتحمل.',
     toastImgOpen: 'اتفتحت في تاب جديد، احفظها من هناك.',
   };
 

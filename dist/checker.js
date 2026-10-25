@@ -1,4 +1,4 @@
-/* Follow Back Checker 1.5.1. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+/* Follow Back Checker 1.5.2. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
 // Panel styles. Injected into a shadow root by content.js, so Instagram's own CSS cannot leak in
 // and a strict page CSP cannot block them (they go in through a constructed stylesheet).
 var FBC_CSS = `
@@ -559,6 +559,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     lbFull: 'Full size',
     lbSave: 'Download image',
     lbFullFailed: 'Could not load the full size: {r}',
+    lbSlow: 'Instagram asked to slow down. Full-size pictures are back after {t}; until then only the small one can be saved.',
     toastImgOpen: 'Opened in a new tab; save it from there.',
   };
 
@@ -723,6 +724,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     lbFull: 'الحجم الكامل',
     lbSave: 'تحميل الصورة',
     lbFullFailed: 'مقدرناش نجيب الحجم الكامل: {r}',
+    lbSlow: 'إنستجرام طلب نهدّي شوية. الصور الكبيرة هترجع بعد {t}، ولحد ساعتها الصغيرة بس هي اللي بتتحمل.',
     toastImgOpen: 'اتفتحت في تاب جديد، احفظها من هناك.',
   };
 
@@ -1232,10 +1234,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     ui.lbFull.textContent = t('pillChecking');
     lb.loading = (async () => {
       try {
-        const j = await igGet('/api/v1/users/web_profile_info/?username=' + encodeURIComponent(rec.u));
-        const u = j && j.data && j.data.user;
-        const hd = u && typeof u.profile_pic_url_hd === 'string' ? u.profile_pic_url_hd : (u && typeof u.profile_pic_url === 'string' ? u.profile_pic_url : '');
-        if (!hd || !/^https:\/\//.test(hd)) throw new Error('no picture');
+        const hd = await fetchHdPicture(rec);
         if (lb.rec !== rec) return false; // another picture was opened meanwhile
         lb.url = hd; lb.hd = true;
         ui.lbImg.src = hd;
@@ -1243,13 +1242,46 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
         return true;
       } catch (e) {
         if (e instanceof RateLimited) { state.cooldownUntil = Date.now() + REL_COOLDOWN_MS; saveUi(); }
-        if (lb.rec === rec) { toast(t('lbFullFailed', { r: e && e.message ? e.message : String(e) })); showButton(); }
+        if (lb.rec === rec) {
+          toast(e instanceof RateLimited ? t('lbSlow', { t: fmtT(state.cooldownUntil) }) : t('lbFullFailed', { r: e && e.message ? e.message : String(e) }));
+          showButton();
+        }
         return false;
       } finally {
         if (lb.rec === rec) lb.loading = null;
       }
     })();
     return lb.loading;
+  }
+  // The large picture: the account-info endpoint first (it carries the full-resolution picture),
+  // the profile-info endpoint as fallback. Remembered for the session so a picture is asked for once.
+  const hdCache = new Map();
+  async function fetchHdPicture(rec) {
+    const cached = hdCache.get(rec.u);
+    if (cached) return cached;
+    let hd = '';
+    if (rec.id) {
+      try {
+        const j = await igGet(API.info(encodeURIComponent(rec.id)));
+        const u = j && j.user;
+        if (u && u.hd_profile_pic_url_info && typeof u.hd_profile_pic_url_info.url === 'string') hd = u.hd_profile_pic_url_info.url;
+        if (!hd && u && Array.isArray(u.hd_profile_pic_versions) && u.hd_profile_pic_versions.length) {
+          const best = u.hd_profile_pic_versions.reduce((a, b) => ((b && b.width > (a && a.width || 0)) ? b : a), null);
+          if (best && typeof best.url === 'string') hd = best.url;
+        }
+        if (!hd && u && typeof u.profile_pic_url === 'string') hd = u.profile_pic_url;
+      } catch (e) {
+        if (e instanceof RateLimited || e instanceof AuthError) throw e;
+      }
+    }
+    if (!hd) {
+      const j = await igGet('/api/v1/users/web_profile_info/?username=' + encodeURIComponent(rec.u));
+      const u = j && j.data && j.data.user;
+      hd = u && typeof u.profile_pic_url_hd === 'string' ? u.profile_pic_url_hd : (u && typeof u.profile_pic_url === 'string' ? u.profile_pic_url : '');
+    }
+    if (!hd || !/^https:\/\//.test(hd)) throw new Error('no picture');
+    hdCache.set(rec.u, hd);
+    return hd;
   }
   // Downloads the full-size picture, fetching it first when the viewer still shows the thumbnail.
   async function saveCurrentImage() {
