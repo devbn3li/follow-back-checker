@@ -15,7 +15,7 @@
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -34,6 +34,10 @@
   const PACE = { minDelayMs: 1200, jitterMs: 1600, rateLimitWaitMs: 90000, rateLimitRetries: 2, longPauseEvery: 15, longPauseMs: 10000 };
   // How many "follow you, not followed back" accounts are double-checked one by one after a check.
   const VERIFY_MAX = 20;
+  // Unfollow: one account per tap, confirmed, spaced out, capped, verified, and paused when Instagram objects.
+  // docId is the persisted GraphQL query behind instagram.com's own Unfollow button; Instagram rotates it now
+  // and then. The older REST route is tried first and needs no such id.
+  const ACT = { gapMs: 20000, perHour: 30, perDay: 100, blockPauseMs: 2 * 60 * 60 * 1000, rateLimitPauseMs: 30 * 60 * 1000, docId: '27789106940691111', friendlyName: 'usePolarisUnfollowMutation' };
 
   // --- language and formatting
   let lang = String(navigator.language || '').toLowerCase().startsWith('ar') ? 'ar' : 'en';
@@ -135,6 +139,7 @@
   const doneStoreKey = (uid) => 'fbc.done.' + uid;
   const histStoreKey = (uid) => 'fbc.hist.' + uid;
   const whiteStoreKey = (uid) => 'fbc.white.' + uid;
+  const actStoreKey = (uid) => 'fbc.actions.' + uid;
   const HIST_CAPS = { points: 400, events: 3000 };
 
   // --- Instagram requests
@@ -288,7 +293,8 @@
     mutual: { label: 'tileMutual', title: 'titleMutual', empty: 'emptyMutual' },
     changes: { label: 'tileHistory', title: 'titleHistory', empty: '' },
   };
-  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, lists: null, hist: null, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0 };
+  const freshActions = () => ({ times: [], pausedUntil: 0, warned: false });
+  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0 };
   const live = { following: 0, followers: 0 };
   const ui = {};
   // Small preferences, remembered across visits: language, panel width, and the pause after Instagram asks us to slow down.
@@ -392,6 +398,11 @@
     ui.notice = h('div', { class: 'notice', hidden: true });
     ui.results = h('div', { class: 'results', hidden: true }, ui.ledger, ui.notice, ui.tiles, ui.toolbar, ui.listTitle, ui.chart, ui.prot, ui.list);
     ui.toast = h('div', { class: 'toast', role: 'status', hidden: true });
+    ui.modalTitle = h('div', { class: 'mtitle' });
+    ui.modalText = h('div', { class: 'mtext' });
+    ui.modalOk = h('button', { class: 'btn primary', type: 'button' });
+    ui.modalCancel = h('button', { class: 'btn', type: 'button' });
+    ui.modal = h('div', { class: 'modal', role: 'dialog', hidden: true }, h('div', { class: 'box' }, ui.modalTitle, ui.modalText, h('div', { class: 'toolbar' }, ui.modalOk, ui.modalCancel)));
     ui.grip = h('div', { class: 'grip' });
     ui.foot = h('footer', { class: 'foot' });
     ui.body = h('div', { class: 'body' }, ui.results, ui.empty);
@@ -404,6 +415,7 @@
       ui.body,
       ui.foot,
       ui.toast,
+      ui.modal,
     );
     root.append(ui.fabwrap, ui.drawer);
     relabel();
@@ -449,6 +461,19 @@
     ui.rel.title = t('pillTitle');
   }
   function updateProtectedBtn() { ui.protectedBtn.textContent = t('protectedBtn', { n: num(Object.keys(state.white).length) }); }
+  // A yes/no box inside the panel (the viewer never shows window.confirm).
+  function askConfirm(titleKey, textKey, okKey, vars) {
+    return new Promise((resolve) => {
+      ui.modalTitle.textContent = t(titleKey, vars);
+      ui.modalText.textContent = t(textKey, vars);
+      ui.modalOk.textContent = t(okKey, vars);
+      ui.modalCancel.textContent = t('cancel');
+      ui.modal.hidden = false;
+      const done = (v) => { ui.modal.hidden = true; ui.modalOk.onclick = null; ui.modalCancel.onclick = null; resolve(v); };
+      ui.modalOk.onclick = () => done(true);
+      ui.modalCancel.onclick = () => done(false);
+    });
+  }
   function setLang(l, silent) {
     lang = l;
     if (!silent) saveUi();
@@ -674,6 +699,19 @@
       r.name ? h('div', { class: 'name', title: r.name }, r.name) : null));
     if (r.ver) row.append(h('span', { class: 'tag ver' }, t('verifiedTag')));
     if (r.priv) row.append(h('span', { class: 'tag' }, t('privateTag')));
+    if (withCheck && state.tab === 'notback' && r.id) {
+      // Two taps within four seconds: the first arms the button, the second unfollows.
+      const ub = h('button', { class: 'unf', type: 'button', title: t('unfollowTitle') }, t('unfollow'));
+      let armed = 0;
+      ub.addEventListener('click', () => {
+        if (armed && Date.now() - armed < 4000) { armed = 0; unfollowRow(r, ub); return; }
+        armed = Date.now();
+        ub.classList.add('arm');
+        ub.textContent = t('unfollowConfirm');
+        setTimeout(() => { if (armed && Date.now() - armed >= 3900) { armed = 0; ub.classList.remove('arm'); ub.textContent = t('unfollow'); } }, 4000);
+      });
+      row.append(ub);
+    }
     if (withCheck) {
       const on = isProtected(r.u);
       const pb = h('button', { class: 'protect' + (on ? ' on' : ''), type: 'button', title: t('protectTitle') }, on ? t('protectedLabel') : t('protect'));
@@ -761,10 +799,12 @@
     const rows = listRows();
     const handled = all.filter((r) => isDone(r.u)).length;
     const protectedN = all.length - base.length;
+    const quota = state.tab === 'notback' ? actionQuota() : null;
     ui.listTitle.textContent = t(TABS[state.tab].title, { n: num(base.length), nRaw: base.length })
       + (rows.length !== base.length ? ' · ' + t('showing', { n: num(rows.length) }) : '')
       + (handled ? ' · ' + t('handled', { n: num(handled) }) : '')
-      + (protectedN ? ' · ' + t('nProtected', { n: num(protectedN) }) : '');
+      + (protectedN ? ' · ' + t('nProtected', { n: num(protectedN) }) : '')
+      + (quota && state.actions.times.length ? ' · ' + t('unfollowQuota', { h: num(quota.hourLeft), d: num(quota.dayLeft) }) : '');
     for (const r of rows) ui.list.append(rowNode(r, true));
     ui.list.hidden = rows.length === 0;
     ui.empty.hidden = rows.length !== 0;
@@ -986,12 +1026,12 @@
   async function loadAccount(uid) {
     const seq = ++loadSeq;
     state.uid = uid;
-    state.snap = null; state.prev = null; state.done = {}; state.white = {}; state.lists = null; state.hist = null;
+    state.snap = null; state.prev = null; state.done = {}; state.white = {}; state.actions = freshActions(); state.lists = null; state.hist = null;
     state.tab = 'notback';
     updateProtectedBtn();
     applySnapshot();
     if (!uid) return;
-    const r = await storageGet([acctStoreKey(uid), doneStoreKey(uid), histStoreKey(uid), whiteStoreKey(uid), 'fbc', 'fbcDone']);
+    const r = await storageGet([acctStoreKey(uid), doneStoreKey(uid), histStoreKey(uid), whiteStoreKey(uid), actStoreKey(uid), 'fbc', 'fbcDone']);
     if (seq !== loadSeq) return; // another account took over while loading
     let acct = r[acctStoreKey(uid)];
     let done = r[doneStoreKey(uid)];
@@ -1006,6 +1046,8 @@
     const white = r[whiteStoreKey(uid)];
     state.white = white && typeof white === 'object' && !Array.isArray(white) ? white : {};
     updateProtectedBtn();
+    const act = r[actStoreKey(uid)];
+    state.actions = act && typeof act === 'object' && Array.isArray(act.times) ? { times: act.times, pausedUntil: Number(act.pausedUntil) || 0, warned: !!act.warned } : freshActions();
     const hist = r[histStoreKey(uid)];
     if (hist && Array.isArray(hist.points) && Array.isArray(hist.events)) {
       state.hist = hist;
@@ -1148,6 +1190,130 @@
     }
   }
   function recheckRel() { if (relUser) { relCache.delete(state.uid + ':' + relUser); showRelFor(relUser, true); } }
+
+  // --- unfollow, one account per tap
+  class ActionBlocked extends Error { constructor(m) { super(m); this.name = 'ActionBlocked'; } }
+  function saveActions() { if (state.uid) storageSet({ [actStoreKey(state.uid)]: state.actions }); }
+  function actionQuota() {
+    const now = Date.now();
+    state.actions.times = state.actions.times.filter((x) => typeof x === 'number' && x > now - 86400000);
+    const hour = state.actions.times.filter((x) => x > now - 3600000).length;
+    return { hourLeft: Math.max(0, ACT.perHour - hour), dayLeft: Math.max(0, ACT.perDay - state.actions.times.length), last: state.actions.times.length ? state.actions.times[state.actions.times.length - 1] : 0 };
+  }
+  // Why an unfollow cannot happen right now, or null when it can.
+  function unfollowBlocker() {
+    if (Date.now() < state.actions.pausedUntil) return t('unfollowBlocked', { t: fmtT(state.actions.pausedUntil) });
+    const q = actionQuota();
+    if (q.last && Date.now() - q.last < ACT.gapMs) return t('unfollowWait', { s: Math.ceil((ACT.gapMs - (Date.now() - q.last)) / 1000) });
+    if (q.hourLeft <= 0) return t('unfollowLimitHour', { n: ACT.perHour });
+    if (q.dayLeft <= 0) return t('unfollowLimitDay', { n: ACT.perDay });
+    return null;
+  }
+  async function postForm(path, headers, params) {
+    let res;
+    try {
+      res = await fetch(location.origin + path, {
+        method: 'POST', credentials: 'include',
+        headers: Object.assign({ 'content-type': 'application/x-www-form-urlencoded' }, headers),
+        body: new URLSearchParams(params).toString(),
+      });
+    } catch (e) { throw new Error(t('errNetwork')); }
+    const text = await res.text().catch(() => '');
+    let data = null;
+    try { data = JSON.parse(text.replace(/^for \(;;\);/, '')); } catch (e) { data = null; }
+    return { status: res.status, data };
+  }
+  let sessionTokens = null;
+  async function webSessionTokens() {
+    if (sessionTokens) return sessionTokens;
+    try {
+      const req = window.require;
+      if (typeof req === 'function') {
+        const d = req('DTSGInitialData'), l = req('LSD');
+        if (d && d.token && l && l.token) { sessionTokens = { fbDtsg: d.token, lsd: l.token, revision: '' }; return sessionTokens; }
+      }
+    } catch (e) { /* not reachable from this world */ }
+    sessionTokens = tokensFromHtml(document.documentElement.innerHTML);
+    if (!sessionTokens) {
+      try { const res = await fetch(location.origin + '/', { credentials: 'include' }); sessionTokens = tokensFromHtml(await res.text()); } catch (e) { sessionTokens = null; }
+    }
+    return sessionTokens;
+  }
+  // Asks Instagram to unfollow one account and only returns once Instagram confirms the follow is gone.
+  async function unfollowRequest(r) {
+    const base = { 'x-csrftoken': cookie('csrftoken'), 'x-ig-app-id': API.appId, 'x-asbd-id': API.asbdId, 'x-requested-with': 'XMLHttpRequest' };
+    // The REST route the web client used for years.
+    let a = await postForm('/api/v1/friendships/destroy/' + encodeURIComponent(r.id) + '/', base, { container_module: 'profile', user_id: r.id });
+    let verdict = judgeAction(a.status, a.data);
+    if (verdict === 'blocked') throw new ActionBlocked('blocked');
+    if (verdict !== 'ok') {
+      // The GraphQL mutation the current web client runs from its own Unfollow button.
+      const tokens = await webSessionTokens();
+      if (!tokens) throw new Error('session tokens not found');
+      const params = {
+        av: cookie('ds_user_id'), __d: 'www', __user: '0', __a: '1', __comet_req: '7',
+        fb_dtsg: tokens.fbDtsg, jazoest: jazoest(tokens.fbDtsg), lsd: tokens.lsd,
+        fb_api_caller_class: 'RelayModern', fb_api_req_friendly_name: ACT.friendlyName,
+        variables: JSON.stringify({ target_user_id: r.id, container_module: 'profile', nav_chain: 'PolarisProfilePostsTabRoot:profilePage:1:via_cold_start' }),
+        server_timestamps: 'true', doc_id: ACT.docId,
+      };
+      if (tokens.revision) { params.__rev = tokens.revision; params.__spin_r = tokens.revision; }
+      a = await postForm('/api/graphql', Object.assign({}, base, { 'x-fb-friendly-name': ACT.friendlyName, 'x-fb-lsd': tokens.lsd }), params);
+      verdict = judgeAction(a.status, a.data);
+      if (verdict === 'blocked') throw new ActionBlocked('blocked');
+      if (verdict !== 'ok') throw new Error('HTTP ' + a.status);
+    }
+    let confirmed = findFollowing(a.data, 0) === false;
+    let st = null;
+    try { st = await igGet(API.friendship(encodeURIComponent(r.id))); } catch (e) { if (e instanceof AuthError) throw e; st = null; }
+    if (st && st.following === true) throw new Error(t('unfollowStill'));
+    if (st && typeof st.following === 'boolean') confirmed = true;
+    if (!confirmed) throw new Error(t('unfollowUnconfirmed'));
+  }
+  // Keeps the lists and the history honest after an unfollow, without another full check.
+  function recordUnfollow(r) {
+    const snap = state.snap;
+    if (!snap) return;
+    snap.following = snap.following.filter((x) => x.u !== r.u);
+    state.hist = appendHistory(state.hist, pointFrom(snap), [{ at: Date.now(), type: 'you_unfollowed', u: r.u, name: r.name || '', priv: !!r.priv }], HIST_CAPS);
+    state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
+    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist });
+    ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
+    applyTiles();
+  }
+  async function unfollowRow(r, btn) {
+    btn.classList.remove('arm');
+    btn.textContent = t('unfollow');
+    if (!state.actions.warned) {
+      const ok = await askConfirm('unfollowWarnTitle', 'unfollowWarn', 'unfollowWarnOk', { h: ACT.perHour, d: ACT.perDay });
+      if (!ok) return;
+      state.actions.warned = true;
+      saveActions();
+    }
+    const why = unfollowBlocker();
+    if (why) { toast(why); return; }
+    if (state.running) { toast(t('unfollowBusy')); return; }
+    btn.disabled = true;
+    btn.textContent = t('pillChecking');
+    try {
+      await unfollowRequest(r);
+      state.actions.times.push(Date.now());
+      saveActions();
+      recordUnfollow(r);
+      toast(t('toastUnfollowed', { u: r.u }));
+      renderList();
+    } catch (e) {
+      if (e instanceof ActionBlocked || e instanceof RateLimited) {
+        state.actions.pausedUntil = Date.now() + (e instanceof ActionBlocked ? ACT.blockPauseMs : ACT.rateLimitPauseMs);
+        saveActions();
+        toast(t('unfollowBlocked', { t: fmtT(state.actions.pausedUntil) }));
+      } else {
+        toast(t('unfollowFailed', { r: e && e.message ? e.message : String(e) }));
+      }
+      btn.disabled = false;
+      btn.textContent = t('unfollow');
+    }
+  }
   function watchProfile() {
     const path = location.pathname;
     if (path === relPath) return;

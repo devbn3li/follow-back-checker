@@ -158,5 +158,38 @@
     }
   }
 
-  return { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind };
+  // The session tokens instagram.com sends with its own GraphQL writes, read from the page HTML.
+  function tokensFromHtml(html) {
+    const s = String(html || '');
+    const dtsg = (/"DTSGInitialData",\[\],\{"token":"([^"]+)"/.exec(s) || /"dtsg":\{"token":"([^"]+)"/.exec(s) || [])[1];
+    const lsd = (/"LSD",\[\],\{"token":"([^"]+)"/.exec(s) || [])[1];
+    if (!dtsg || !lsd) return null;
+    const revision = (/"client_revision":(\d+)/.exec(s) || [])[1] || '';
+    return { fbDtsg: dtsg, lsd, revision };
+  }
+  // Instagram's checksum of fb_dtsg: "2" followed by the sum of its character codes.
+  function jazoest(fbDtsg) {
+    let sum = 0;
+    for (let i = 0; i < fbDtsg.length; i++) sum += fbDtsg.charCodeAt(i);
+    return '2' + sum;
+  }
+  // How Instagram answered a write (an unfollow): 'blocked' means it refused and we must pause,
+  // 'ok' means it accepted (still to be verified), 'failed' covers missing routes, HTML pages and errors.
+  function judgeAction(status, data) {
+    const obj = data && typeof data === 'object' ? data : null;
+    const errorText = obj ? JSON.stringify(obj.errors || obj.error || '') + ' ' + (obj.message || '') + ' ' + (obj.errorSummary || '') : '';
+    if (status === 429 || (obj && obj.spam === true) || /feedback_required|checkpoint|action_blocked|try again later|rate limit/i.test(errorText)) return 'blocked';
+    if (status >= 200 && status < 300 && obj && !obj.errors && !obj.error && obj.status !== 'fail' && (obj.status === 'ok' || obj.data)) return 'ok';
+    return 'failed';
+  }
+  // The "following" flag inside any answer shape (a REST friendship_status or a GraphQL payload).
+  function findFollowing(node, depth) {
+    const d = depth || 0;
+    if (!node || typeof node !== 'object' || d > 6) return null;
+    if (typeof node.following === 'boolean' && ('followed_by' in node || 'outgoing_request' in node || 'is_private' in node || 'incoming_request' in node)) return node.following;
+    for (const v of Object.values(node)) { const r = findFollowing(v, d + 1); if (r !== null) return r; }
+    return null;
+  }
+
+  return { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing };
 });

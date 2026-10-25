@@ -147,3 +147,29 @@ test('matchesKind filters by verified and private', () => {
   assert.equal(core.matchesKind(v, 'public'), true);
   assert.equal(core.matchesKind(v, 'all'), true);
 });
+
+test('tokensFromHtml and jazoest read the write tokens from the page', () => {
+  const html = 'x["DTSGInitialData",[],{"token":"AQHabc:123"}]y["LSD",[],{"token":"lsdTok"}]z"client_revision":1017 ';
+  assert.deepEqual(core.tokensFromHtml(html), { fbDtsg: 'AQHabc:123', lsd: 'lsdTok', revision: '1017' });
+  assert.equal(core.tokensFromHtml('nothing here'), null);
+  assert.equal(core.tokensFromHtml('"dtsg":{"token":"T"} "LSD",[],{"token":"L"}').fbDtsg, 'T');
+  assert.equal(core.jazoest('AB'), '2' + (65 + 66));
+});
+
+test('judgeAction tells accepted, blocked and failed answers apart', () => {
+  assert.equal(core.judgeAction(200, { status: 'ok', friendship_status: { following: false } }), 'ok');
+  assert.equal(core.judgeAction(200, { data: { xdt_destroy_friendship: { friendship_status: { following: false } } } }), 'ok');
+  assert.equal(core.judgeAction(429, null), 'blocked');
+  assert.equal(core.judgeAction(400, { message: 'feedback_required', status: 'fail' }), 'blocked');
+  assert.equal(core.judgeAction(200, { spam: true }), 'blocked');
+  assert.equal(core.judgeAction(200, null), 'failed', 'an HTML page is not an answer');
+  assert.equal(core.judgeAction(404, { status: 'fail', message: 'not found' }), 'failed');
+  assert.equal(core.judgeAction(200, { errors: [{ message: 'x' }] }), 'failed');
+});
+
+test('findFollowing digs the following flag out of any answer', () => {
+  assert.equal(core.findFollowing({ status: 'ok', friendship_status: { following: false, followed_by: true } }), false);
+  assert.equal(core.findFollowing({ data: { x: { friendship_status: { following: true, outgoing_request: false } } } }), true);
+  assert.equal(core.findFollowing({ following: true }), null, 'a lone flag without the other fields is ignored');
+  assert.equal(core.findFollowing(null), null);
+});

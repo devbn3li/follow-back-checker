@@ -126,6 +126,14 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .protect { flex: none; background: none; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted); padding: 2px 7px; cursor: pointer; white-space: nowrap; }
 .protect:hover { border-color: var(--accent); color: var(--fg); }
 .protect.on { background: var(--accent-soft); border-color: var(--accent); color: var(--fg); }
+.unf { flex: none; background: none; border: 1px solid var(--danger); border-radius: 6px; font-size: 11px; color: var(--danger); padding: 2px 7px; cursor: pointer; white-space: nowrap; }
+.unf:hover { background: var(--danger-soft); }
+.unf.arm { background: var(--danger); color: var(--bg); }
+.unf:disabled { opacity: 0.6; cursor: progress; }
+.modal { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); display: grid; place-items: center; z-index: 5; padding: 16px; }
+.modal .box { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 12px; padding: 16px; max-width: 380px; display: grid; gap: 10px; box-shadow: 0 12px 40px var(--shadow); }
+.mtitle { font-weight: 700; font-size: 15px; }
+.mtext { font-size: 13.5px; line-height: 1.5; }
 .prot { display: grid; gap: 10px; }
 .hint { font-size: 12.5px; color: var(--muted); }
 .field.area { width: 100%; min-height: 64px; resize: vertical; font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; font-size: 13px; direction: ltr; }
