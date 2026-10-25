@@ -19,7 +19,7 @@ The panel is in Arabic when the browser is, English otherwise, with a toggle in 
 ### Android app
 
 1. Download the latest `FollowCheck-*.apk` from [Releases](../../releases) on the phone.
-2. Open it. Android asks once to allow installs from this source.
+2. Open it. Android asks once to allow installs from this source, and Google Play Protect scans the file for a few seconds. That scan happens for every app installed outside the Play Store; it ends with **Install**.
 3. Open Follow Check, log in to Instagram as usual, then tap the **Follow check** button at the bottom.
 
 The app is a single screen with Instagram's website inside it and the checker injected into every page. On start it fetches the latest checker from this repository, so fixes arrive without a reinstall.

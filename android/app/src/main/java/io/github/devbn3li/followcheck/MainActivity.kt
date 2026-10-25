@@ -2,6 +2,7 @@ package io.github.devbn3li.followcheck
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -10,6 +11,9 @@ import android.webkit.WebViewClient
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 
 /**
  * One screen: Instagram's website in a WebView, with the Follow Back Checker script injected into
@@ -22,7 +26,18 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        val root = findViewById<View>(R.id.root)
         web = findViewById(R.id.web)
+
+        // Android 15 draws the app behind the system bars. Keep the page (and the panel's header)
+        // clear of the status bar, the navigation bar and the keyboard.
+        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
+        WindowCompat.getInsetsController(window, root).isAppearanceLightStatusBars = false
+
         with(web.settings) {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -38,6 +53,9 @@ class MainActivity : AppCompatActivity() {
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url
+                val scheme = url.scheme ?: return false
+                // "Open Instagram" and "Use the app" are intent:// links to the official app. Stay here.
+                if (scheme != "http" && scheme != "https") return true
                 val host = url.host ?: return false
                 if (isInstagram(host)) return false
                 // Anything else (help pages, external links) opens in the phone's browser.
@@ -105,6 +123,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
-        const val HOME = "https://www.instagram.com/"
+        // The login page, not the landing page that pushes the official app. Logged-in users are sent on to the feed.
+        const val HOME = "https://www.instagram.com/accounts/login/"
     }
 }

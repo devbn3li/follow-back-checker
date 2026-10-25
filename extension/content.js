@@ -934,7 +934,18 @@
     relTimer = setTimeout(() => showRelFor(username), 600);
   }
 
+  // Inside the Android app, Instagram's "Open Instagram" / "Use the app" links point at the official
+  // app and would only show an error page. Hide them; the app also ignores that link scheme.
+  function hideAppPrompts() {
+    try {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync('a[href^="intent:"], a[href*="applink.instagram.com"] { display: none !important; }');
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    } catch (e) { /* older WebView: the navigation is blocked by the app anyway */ }
+  }
+
   // --- boot
+  if (HOST === 'android') hideAppPrompts();
   build();
   mount();
   setInterval(mount, 3000); // Instagram re-renders a lot; keep the host attached
