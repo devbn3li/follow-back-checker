@@ -300,12 +300,12 @@
     changes: { label: 'tileHistory', title: 'titleHistory', empty: '' },
   };
   const freshActions = () => ({ times: [], pausedUntil: 0, warned: false });
-  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0 };
+  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0, countsPausedUntil: 0 };
   const live = { following: 0, followers: 0 };
   const ui = {};
   // Small preferences, remembered across visits: language, panel width, and the pause after Instagram asks us to slow down.
   const UI_KEY = 'fbc.ui';
-  function saveUi() { storageSet({ [UI_KEY]: { lang, width: state.width, cooldownUntil: state.cooldownUntil } }); }
+  function saveUi() { storageSet({ [UI_KEY]: { lang, width: state.width, cooldownUntil: state.cooldownUntil, countsPausedUntil: state.countsPausedUntil } }); }
   const WIDTH = { def: 640, min: 380, max: 1100, narrowBelow: 560 };
   function applyWidth(w) {
     const cap = Math.min(WIDTH.max, window.innerWidth || WIDTH.max);
@@ -456,6 +456,7 @@
       const prefs = r[UI_KEY] && typeof r[UI_KEY] === 'object' ? r[UI_KEY] : {};
       state.width = applyWidth(typeof prefs.width === 'number' ? prefs.width : WIDTH.def);
       if (typeof prefs.cooldownUntil === 'number' && prefs.cooldownUntil > Date.now()) state.cooldownUntil = prefs.cooldownUntil;
+      if (typeof prefs.countsPausedUntil === 'number' && prefs.countsPausedUntil > Date.now()) state.countsPausedUntil = prefs.countsPausedUntil;
       if ((prefs.lang === 'ar' || prefs.lang === 'en') && prefs.lang !== lang) setLang(prefs.lang, true);
     });
   }
@@ -1899,7 +1900,7 @@
   async function loadCounts() {
     if (state.countsRun) { state.countsRun.cancelled = true; return; }
     if (!state.lists || state.running) { if (state.running) toast(t('unfollowBusy')); return; }
-    if (Date.now() < state.cooldownUntil) { toast(t('pillPaused', { t: fmtT(state.cooldownUntil) })); return; }
+    if (Date.now() < state.countsPausedUntil) { toast(t('countsPaused', { t: fmtT(state.countsPausedUntil) })); return; }
     const fresh = (u) => state.counts[u] && Date.now() - state.counts[u].at < COUNTS.ttlMs;
     const todo = listRows().filter((r) => r.id && !fresh(r.u)).slice(0, COUNTS.max);
     if (!todo.length) { toast(t('countsNothing')); return; }
@@ -1925,8 +1926,8 @@
     } catch (e) {
       if (e instanceof Cancelled) toast(t('countsStopped', { n: num(done) }));
       else {
-        if (e instanceof RateLimited) { state.cooldownUntil = Date.now() + REL_COOLDOWN_MS; saveUi(); }
-        toast(t('liveFailed', { r: e && e.message ? e.message : String(e) }));
+        if (e instanceof RateLimited) { state.countsPausedUntil = Date.now() + REL_COOLDOWN_MS; saveUi(); toast(t('countsPaused', { t: fmtT(state.countsPausedUntil) })); }
+        else toast(t('liveFailed', { r: e && e.message ? e.message : String(e) }));
       }
     } finally {
       state.countsRun = null;

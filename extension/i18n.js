@@ -243,6 +243,7 @@
     sortName: 'Sort: username',
     sortFollowers: 'Sort: most followers',
     sortRatio: 'Sort: least likely to follow back',
+    countsPaused: 'Counts paused until {t}: Instagram asked to slow down. What was loaded so far is kept.',
   };
 
   const ar = {
@@ -481,6 +482,7 @@
     sortName: 'ترتيب: الاسم',
     sortFollowers: 'ترتيب: الأكتر متابعين',
     sortRatio: 'ترتيب: الأصعب يردوا',
+    countsPaused: 'الأرقام واقفة لحد {t}: إنستجرام طلب نهدّي. اللي اتحمّل لحد دلوقتي متحفوظ.',
   };
 
   return { en, ar };
