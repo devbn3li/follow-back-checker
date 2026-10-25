@@ -107,13 +107,11 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .row { display: flex; gap: 10px; align-items: center; padding: 8px 12px; min-width: 0; }
 .row.done { opacity: 0.5; }
 .row.done .handle { text-decoration: line-through; }
-.who { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
-.drawer.narrow .who { flex-direction: column; align-items: flex-start; gap: 1px; }
+.who { flex: 1 1 auto; min-width: 0; display: grid; gap: 1px; align-content: center; }
 .handle { flex: none; font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; font-size: 13.5px; font-weight: 500; color: var(--fg); text-decoration: none; overflow-wrap: anywhere; direction: ltr; unicode-bidi: isolate; }
 .handle:hover { color: var(--accent); text-decoration: underline; }
 .handle .arrow { color: var(--muted); font-size: 12px; margin-left: 4px; }
-.name { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.drawer.narrow .name { max-width: 100%; }
+.name { min-width: 0; max-width: 100%; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
 .group { padding: 8px 12px 4px; font-size: 11.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; background: var(--bg2); }
 .chip { flex: none; font-size: 11px; border-radius: 999px; padding: 2px 8px; white-space: nowrap; border: 1px solid var(--border); color: var(--muted); }
