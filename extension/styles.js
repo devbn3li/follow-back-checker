@@ -125,7 +125,9 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .lbimg { max-width: min(90vw, 480px); max-height: 70vh; border-radius: 12px; background: var(--bg2); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); }
 .lbname { color: #FFFFFF; font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; font-size: 14px; direction: ltr; }
 .lbbar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
-.lightbox .btn { background: var(--bg); }
+.lightbox .btn { background: var(--bg); color: var(--fg); }
+.lightbox .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.lightbox .btn:disabled { opacity: 0.6; cursor: progress; }
 .tag.ver { color: var(--accent); border-color: var(--accent); }
 .protect { flex: none; background: none; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted); padding: 2px 7px; cursor: pointer; white-space: nowrap; }
 .protect:hover { border-color: var(--accent); color: var(--fg); }

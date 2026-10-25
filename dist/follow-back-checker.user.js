@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Follow Back Checker
 // @namespace    https://github.com/devbn3li/follow-back-checker
-// @version      1.5.0
+// @version      1.5.1
 // @description  Who you follow that does not follow you back, from your own logged-in instagram.com session. Nothing leaves the browser.
 // @author       devbn3li
 // @match        https://www.instagram.com/*
@@ -11,7 +11,7 @@
 // @downloadURL  https://raw.githubusercontent.com/devbn3li/follow-back-checker/main/dist/follow-back-checker.user.js
 // ==/UserScript==
 
-/* Follow Back Checker 1.5.0. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+/* Follow Back Checker 1.5.1. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
 // Panel styles. Injected into a shadow root by content.js, so Instagram's own CSS cannot leak in
 // and a strict page CSP cannot block them (they go in through a constructed stylesheet).
 var FBC_CSS = `
@@ -139,7 +139,9 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .lbimg { max-width: min(90vw, 480px); max-height: 70vh; border-radius: 12px; background: var(--bg2); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); }
 .lbname { color: #FFFFFF; font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; font-size: 14px; direction: ltr; }
 .lbbar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
-.lightbox .btn { background: var(--bg); }
+.lightbox .btn { background: var(--bg); color: var(--fg); }
+.lightbox .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.lightbox .btn:disabled { opacity: 0.6; cursor: progress; }
 .tag.ver { color: var(--accent); border-color: var(--accent); }
 .protect { flex: none; background: none; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted); padding: 2px 7px; cursor: pointer; white-space: nowrap; }
 .protect:hover { border-color: var(--accent); color: var(--fg); }
@@ -568,7 +570,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     unfollowWarnOk: 'I understand',
     unfollowQuota: '{h} unfollows left this hour, {d} today',
     lbFull: 'Full size',
-    lbSave: 'Save image',
+    lbSave: 'Download image',
     lbFullFailed: 'Could not load the full size: {r}',
     toastImgOpen: 'Opened in a new tab; save it from there.',
   };
@@ -732,7 +734,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     unfollowWarnOk: 'فاهم',
     unfollowQuota: 'باقي {h} إلغاء الساعة دي، {d} النهاردة',
     lbFull: 'الحجم الكامل',
-    lbSave: 'حفظ الصورة',
+    lbSave: 'تحميل الصورة',
     lbFullFailed: 'مقدرناش نجيب الحجم الكامل: {r}',
     toastImgOpen: 'اتفتحت في تاب جديد، احفظها من هناك.',
   };
@@ -1218,40 +1220,62 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const lb = { rec: null, url: '', hd: false };
   function openLightbox(rec) {
     if (!rec || !rec.pic) return;
-    lb.rec = rec; lb.url = rec.pic; lb.hd = false;
+    lb.rec = rec; lb.url = rec.pic; lb.hd = false; lb.loading = null;
     ui.lbImg.src = rec.pic;
     ui.lbName.textContent = '@' + rec.u;
-    ui.lbFull.hidden = false;
-    ui.lbFull.disabled = false;
-    ui.lbFull.textContent = t('lbFull');
+    ui.lbFull.hidden = true;
     ui.lightbox.hidden = false;
+    loadFullSize(true); // the lists only carry a 150px thumbnail; fetch the real picture right away
   }
   function closeLightbox() { ui.lightbox.hidden = true; }
-  // One profile-info request, the same one the site makes, for the large picture.
-  async function loadFullSize() {
+  // One profile-info request, the same one the site makes, for the large picture. Resolves to
+  // true once the viewer shows the full size. The button only appears when the automatic load could not run.
+  function loadFullSize(auto) {
     const rec = lb.rec;
-    if (!rec) return;
-    if (Date.now() < state.cooldownUntil) { toast(t('pillPaused', { t: fmtT(state.cooldownUntil) })); return; }
+    if (!rec || lb.hd) return Promise.resolve(!!lb.hd);
+    if (lb.loading) return lb.loading;
+    const showButton = () => { ui.lbFull.hidden = false; ui.lbFull.disabled = false; ui.lbFull.textContent = t('lbFull'); };
+    if (Date.now() < state.cooldownUntil) {
+      if (!auto) toast(t('pillPaused', { t: fmtT(state.cooldownUntil) }));
+      showButton();
+      return Promise.resolve(false);
+    }
+    ui.lbFull.hidden = false;
     ui.lbFull.disabled = true;
     ui.lbFull.textContent = t('pillChecking');
-    try {
-      const j = await igGet('/api/v1/users/web_profile_info/?username=' + encodeURIComponent(rec.u));
-      const u = j && j.data && j.data.user;
-      const hd = u && typeof u.profile_pic_url_hd === 'string' ? u.profile_pic_url_hd : (u && typeof u.profile_pic_url === 'string' ? u.profile_pic_url : '');
-      if (!hd || !/^https:\/\//.test(hd)) throw new Error('no picture');
-      lb.url = hd; lb.hd = true;
-      ui.lbImg.src = hd;
-      ui.lbFull.hidden = true;
-    } catch (e) {
-      if (e instanceof RateLimited) { state.cooldownUntil = Date.now() + REL_COOLDOWN_MS; saveUi(); }
-      toast(t('lbFullFailed', { r: e && e.message ? e.message : String(e) }));
-      ui.lbFull.disabled = false;
-      ui.lbFull.textContent = t('lbFull');
-    }
+    lb.loading = (async () => {
+      try {
+        const j = await igGet('/api/v1/users/web_profile_info/?username=' + encodeURIComponent(rec.u));
+        const u = j && j.data && j.data.user;
+        const hd = u && typeof u.profile_pic_url_hd === 'string' ? u.profile_pic_url_hd : (u && typeof u.profile_pic_url === 'string' ? u.profile_pic_url : '');
+        if (!hd || !/^https:\/\//.test(hd)) throw new Error('no picture');
+        if (lb.rec !== rec) return false; // another picture was opened meanwhile
+        lb.url = hd; lb.hd = true;
+        ui.lbImg.src = hd;
+        ui.lbFull.hidden = true;
+        return true;
+      } catch (e) {
+        if (e instanceof RateLimited) { state.cooldownUntil = Date.now() + REL_COOLDOWN_MS; saveUi(); }
+        if (lb.rec === rec) { toast(t('lbFullFailed', { r: e && e.message ? e.message : String(e) })); showButton(); }
+        return false;
+      } finally {
+        if (lb.rec === rec) lb.loading = null;
+      }
+    })();
+    return lb.loading;
   }
-  function saveCurrentImage() {
-    if (!lb.rec || !lb.url) return;
-    saveImage(lb.url, lb.rec.u + (lb.hd ? '-full' : '') + '.jpg');
+  // Downloads the full-size picture, fetching it first when the viewer still shows the thumbnail.
+  async function saveCurrentImage() {
+    const rec = lb.rec;
+    if (!rec || !lb.url) return;
+    ui.lbSave.disabled = true;
+    try {
+      if (!lb.hd) await loadFullSize(false);
+      if (lb.rec !== rec) return;
+      await saveImage(lb.url, rec.u + (lb.hd ? '' : '-small') + '.jpg');
+    } finally {
+      ui.lbSave.disabled = false;
+    }
   }
   // Saves a picture: through the Android app when it hosts the page, otherwise as a browser download,
   // and if the picture host refuses cross-origin reads, in a new tab to save from there.

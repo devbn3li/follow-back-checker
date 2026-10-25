@@ -166,7 +166,7 @@
     unfollowWarnOk: 'I understand',
     unfollowQuota: '{h} unfollows left this hour, {d} today',
     lbFull: 'Full size',
-    lbSave: 'Save image',
+    lbSave: 'Download image',
     lbFullFailed: 'Could not load the full size: {r}',
     toastImgOpen: 'Opened in a new tab; save it from there.',
   };
@@ -330,7 +330,7 @@
     unfollowWarnOk: 'فاهم',
     unfollowQuota: 'باقي {h} إلغاء الساعة دي، {d} النهاردة',
     lbFull: 'الحجم الكامل',
-    lbSave: 'حفظ الصورة',
+    lbSave: 'تحميل الصورة',
     lbFullFailed: 'مقدرناش نجيب الحجم الكامل: {r}',
     toastImgOpen: 'اتفتحت في تاب جديد، احفظها من هناك.',
   };

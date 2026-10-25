@@ -475,40 +475,62 @@
   const lb = { rec: null, url: '', hd: false };
   function openLightbox(rec) {
     if (!rec || !rec.pic) return;
-    lb.rec = rec; lb.url = rec.pic; lb.hd = false;
+    lb.rec = rec; lb.url = rec.pic; lb.hd = false; lb.loading = null;
     ui.lbImg.src = rec.pic;
     ui.lbName.textContent = '@' + rec.u;
-    ui.lbFull.hidden = false;
-    ui.lbFull.disabled = false;
-    ui.lbFull.textContent = t('lbFull');
+    ui.lbFull.hidden = true;
     ui.lightbox.hidden = false;
+    loadFullSize(true); // the lists only carry a 150px thumbnail; fetch the real picture right away
   }
   function closeLightbox() { ui.lightbox.hidden = true; }
-  // One profile-info request, the same one the site makes, for the large picture.
-  async function loadFullSize() {
+  // One profile-info request, the same one the site makes, for the large picture. Resolves to
+  // true once the viewer shows the full size. The button only appears when the automatic load could not run.
+  function loadFullSize(auto) {
     const rec = lb.rec;
-    if (!rec) return;
-    if (Date.now() < state.cooldownUntil) { toast(t('pillPaused', { t: fmtT(state.cooldownUntil) })); return; }
+    if (!rec || lb.hd) return Promise.resolve(!!lb.hd);
+    if (lb.loading) return lb.loading;
+    const showButton = () => { ui.lbFull.hidden = false; ui.lbFull.disabled = false; ui.lbFull.textContent = t('lbFull'); };
+    if (Date.now() < state.cooldownUntil) {
+      if (!auto) toast(t('pillPaused', { t: fmtT(state.cooldownUntil) }));
+      showButton();
+      return Promise.resolve(false);
+    }
+    ui.lbFull.hidden = false;
     ui.lbFull.disabled = true;
     ui.lbFull.textContent = t('pillChecking');
-    try {
-      const j = await igGet('/api/v1/users/web_profile_info/?username=' + encodeURIComponent(rec.u));
-      const u = j && j.data && j.data.user;
-      const hd = u && typeof u.profile_pic_url_hd === 'string' ? u.profile_pic_url_hd : (u && typeof u.profile_pic_url === 'string' ? u.profile_pic_url : '');
-      if (!hd || !/^https:\/\//.test(hd)) throw new Error('no picture');
-      lb.url = hd; lb.hd = true;
-      ui.lbImg.src = hd;
-      ui.lbFull.hidden = true;
-    } catch (e) {
-      if (e instanceof RateLimited) { state.cooldownUntil = Date.now() + REL_COOLDOWN_MS; saveUi(); }
-      toast(t('lbFullFailed', { r: e && e.message ? e.message : String(e) }));
-      ui.lbFull.disabled = false;
-      ui.lbFull.textContent = t('lbFull');
-    }
+    lb.loading = (async () => {
+      try {
+        const j = await igGet('/api/v1/users/web_profile_info/?username=' + encodeURIComponent(rec.u));
+        const u = j && j.data && j.data.user;
+        const hd = u && typeof u.profile_pic_url_hd === 'string' ? u.profile_pic_url_hd : (u && typeof u.profile_pic_url === 'string' ? u.profile_pic_url : '');
+        if (!hd || !/^https:\/\//.test(hd)) throw new Error('no picture');
+        if (lb.rec !== rec) return false; // another picture was opened meanwhile
+        lb.url = hd; lb.hd = true;
+        ui.lbImg.src = hd;
+        ui.lbFull.hidden = true;
+        return true;
+      } catch (e) {
+        if (e instanceof RateLimited) { state.cooldownUntil = Date.now() + REL_COOLDOWN_MS; saveUi(); }
+        if (lb.rec === rec) { toast(t('lbFullFailed', { r: e && e.message ? e.message : String(e) })); showButton(); }
+        return false;
+      } finally {
+        if (lb.rec === rec) lb.loading = null;
+      }
+    })();
+    return lb.loading;
   }
-  function saveCurrentImage() {
-    if (!lb.rec || !lb.url) return;
-    saveImage(lb.url, lb.rec.u + (lb.hd ? '-full' : '') + '.jpg');
+  // Downloads the full-size picture, fetching it first when the viewer still shows the thumbnail.
+  async function saveCurrentImage() {
+    const rec = lb.rec;
+    if (!rec || !lb.url) return;
+    ui.lbSave.disabled = true;
+    try {
+      if (!lb.hd) await loadFullSize(false);
+      if (lb.rec !== rec) return;
+      await saveImage(lb.url, rec.u + (lb.hd ? '' : '-small') + '.jpg');
+    } finally {
+      ui.lbSave.disabled = false;
+    }
   }
   // Saves a picture: through the Android app when it hosts the page, otherwise as a browser download,
   // and if the picture host refuses cross-origin reads, in a new tab to save from there.
