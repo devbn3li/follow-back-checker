@@ -1,5 +1,5 @@
-/* Follow Back Checker 1.11.1. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
-if (typeof window !== 'undefined') window.FBC_VERSION = '1.11.1';
+/* Follow Back Checker 1.11.2. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+if (typeof window !== 'undefined') window.FBC_VERSION = '1.11.2';
 // Panel styles. Injected into a shadow root by content.js, so Instagram's own CSS cannot leak in
 // and a strict page CSP cannot block them (they go in through a constructed stylesheet).
 var FBC_CSS = `
