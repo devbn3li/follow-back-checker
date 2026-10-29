@@ -216,7 +216,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 `;
 
 ;
-// Follow Back Checker: pure logic shared by the extension, the Android app and the tests.
+// Follow Back Checker: pure logic shared by the extension, the Android app, the export reader and the tests.
 // No DOM, no network, no storage here; everything is a plain function of its inputs.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -606,7 +606,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
         // Older files put the username in value; the current following.json only in the title and the link.
         for (const d of v.string_list_data) {
           if (!d) continue;
-          const fromHref = typeof d.href === 'string' ? (d.href.match(/instagram\.com\/([^/?#]+)/) || [])[1] : '';
+          const fromHref = typeof d.href === 'string' ? (d.href.match(/instagram\.com\/(?:_u\/)?([^/?#]+)/) || [])[1] : '';
           push(typeof d.value === 'string' && d.value ? d.value : (typeof v.title === 'string' && v.title ? v.title : fromHref), d.timestamp);
         }
         return;
@@ -626,7 +626,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     }
     if (/<\s*(html|div|a)\b/i.test(trimmed)) {
       // The HTML export: one link per account, the date in the text that follows it.
-      const re = /instagram\.com\/([A-Za-z0-9._]{1,30})\/?["'][^>]*>[^<]*<\/a>([\s\S]{0,200}?)(?=<a |$)/g;
+      const re = /instagram\.com\/(?:_u\/)?([A-Za-z0-9._]{1,30})\/?["'][^>]*>[^<]*<\/a>([\s\S]{0,200}?)(?=<a |$)/g;
       let m;
       while ((m = re.exec(trimmed))) {
         const plain = m[2].replace(/<[^>]+>/g, ' ');
@@ -824,6 +824,21 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     const buf = await new Response(ds.readable).arrayBuffer();
     return new TextDecoder('utf-8').decode(buf);
   }
+  // Reads entries out of a zip File or Blob through slice, so the media inside a big export is never loaded.
+  // pick: which entries to read, the list files when not given. Returns [{ name, text }], or null for no zip.
+  async function zipReadFile(file, pick) {
+    const bytes = async (from, to) => new Uint8Array(await file.slice(from, to).arrayBuffer());
+    const size = file.size;
+    const e = zipFindEocd(await bytes(Math.max(0, size - 65557), size), size);
+    if (!e) return null;
+    const out = [];
+    for (const c of (pick || exportListEntries)(zipCentral(await bytes(e.cdOffset, e.cdOffset + e.cdSize), e.count))) {
+      const at = zipDataStart(await bytes(c.lho, c.lho + 30));
+      if (at < 0) continue;
+      out.push({ name: c.name, text: await zipText({ method: c.method, data: await bytes(c.lho + at, c.lho + at + c.csize) }) });
+    }
+    return out;
+  }
 
   // --- profile pictures. Instagram hands out picture links on ISP-specific cache hosts
   // (instagram.fXXX-N.fna.fbcdn.net) that only answer from inside that network, so a phone that moves to
@@ -884,7 +899,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     return out;
   }
 
-  return { pickExportEntry, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipEntries, zipText, shouldAutoCheck, autoCheckDefault, compareVersions, parseRelease, loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
+  return { pickExportEntry, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipEntries, zipText, zipReadFile, shouldAutoCheck, autoCheckDefault, compareVersions, parseRelease, loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
 });
 
 ;
@@ -1470,7 +1485,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipText, shouldAutoCheck, autoCheckDefault, parseRelease, pickExportEntry } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, zipReadFile, shouldAutoCheck, autoCheckDefault, parseRelease, pickExportEntry } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -2320,7 +2335,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       const head = new Uint8Array(await f.slice(0, 2).arrayBuffer());
       if (head[0] === 0x50 && head[1] === 0x4b) {
         if (typeof DecompressionStream !== 'function') { toast(t('toastZipOld')); return; }
-        const files = await readExportZip(f, (entries) => [pickExportEntry(entries, 'pending_follow_requests'), pickExportEntry(entries, 'recently_unfollowed_profiles')].filter(Boolean));
+        const files = await zipReadFile(f, (entries) => [pickExportEntry(entries, 'pending_follow_requests'), pickExportEntry(entries, 'recently_unfollowed_profiles')].filter(Boolean));
         const pend = (files || []).find((x) => /pending_follow_requests/i.test(x.name));
         if (!pend) { toast(t('zipNoPending')); return; }
         text = pend.text;
@@ -3703,23 +3718,6 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     state.dates = applyDateEvents(state.dates, events);
     updateDatesStatus();
   }
-  // Reads the list files out of an export zip through File.slice, so the media inside is never loaded.
-  // pick: which entries to read, the list files when not given.
-  async function readExportZip(file, pick) {
-    const size = file.size;
-    const tail = new Uint8Array(await file.slice(Math.max(0, size - 65557), size).arrayBuffer());
-    const e = zipFindEocd(tail, size);
-    if (!e) return null;
-    const cd = new Uint8Array(await file.slice(e.cdOffset, e.cdOffset + e.cdSize).arrayBuffer());
-    const out = [];
-    for (const c of (pick || exportListEntries)(zipCentral(cd, e.count))) {
-      const at = zipDataStart(new Uint8Array(await file.slice(c.lho, c.lho + 30).arrayBuffer()));
-      if (at < 0) continue;
-      const data = new Uint8Array(await file.slice(c.lho + at, c.lho + at + c.csize).arrayBuffer());
-      out.push({ name: c.name, text: await zipText({ method: c.method, data }) });
-    }
-    return out;
-  }
   async function importDatesFile() {
     const f = ui.datesFile.files && ui.datesFile.files[0];
     ui.datesFile.value = '';
@@ -3729,7 +3727,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       const head = new Uint8Array(await f.slice(0, 2).arrayBuffer());
       if (head[0] === 0x50 && head[1] === 0x4b) {
         if (typeof DecompressionStream !== 'function') { toast(t('toastZipOld')); return; }
-        files = await readExportZip(f);
+        files = await zipReadFile(f);
         if (!files) { toast(t('toastDatesNone')); return; }
       } else {
         files = [{ name: f.name, text: await f.text() }];

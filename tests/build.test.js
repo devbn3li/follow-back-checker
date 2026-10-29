@@ -28,3 +28,16 @@ test('bundle parses and exposes core and i18n without a DOM', () => {
   assert.equal(typeof sandbox.self.FBC_CORE.derive, 'function');
   assert.equal(typeof sandbox.self.FBC_I18N.ar.fab, 'string');
 });
+
+test('the export reader carries the current core.js and needs nothing from the network to read a zip', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const { withCore } = require('../scripts/build.js');
+  const out = build();
+  const core = fs.readFileSync(path.join(__dirname, '..', 'extension', 'core.js'), 'utf8');
+  assert.equal(fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8'), out.web, 'web/index.html is stale: npm run build');
+  assert.ok(out.web.includes(core.trimEnd()));
+  assert.ok(!/<script[^>]+src=/i.test(out.web), 'no external scripts');
+  assert.equal(withCore(out.web, core), out.web, 'building again changes nothing');
+  assert.throws(() => withCore('<html></html>', core), /markers/);
+});

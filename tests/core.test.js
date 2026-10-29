@@ -602,3 +602,29 @@ test('parsePending takes the username from the title or the link when value is m
     { u: 'from_value', ts: 1700000003000 },
   ]);
 });
+
+test('parsePending reads /_u/ profile links in the JSON and the HTML export', () => {
+  const json = JSON.stringify({ relationships_following: [{ title: '', string_list_data: [{ href: 'https://www.instagram.com/_u/via_u', timestamp: 1700000004 }] }] });
+  assert.deepEqual(core.parsePending(json), [{ u: 'via_u', ts: 1700000004000 }]);
+  const html = '<div><a target="_blank" href="https://www.instagram.com/_u/html_u">html_u</a></div><div>Oct 25, 2026 7:24 am</div>';
+  assert.deepEqual(core.parsePending(html).map((r) => r.u), ['html_u']);
+});
+
+test('zipReadFile reads only the picked entries of a zip Blob, through slice', async () => {
+  const following = JSON.stringify({ relationships_following: [{ title: 'alice', string_list_data: [{ href: 'https://www.instagram.com/alice', timestamp: 1700000000 }] }] });
+  const zip = zipOf([
+    { name: 'connections/followers_and_following/following.json', text: following, deflate: true },
+    { name: 'media/posts/big.jpg', text: 'x'.repeat(5000) },
+    { name: 'connections/followers_and_following/followers_1.json', text: '[]' },
+  ]);
+  const blob = new Blob([zip]);
+  const read = [];
+  const spy = { size: blob.size, slice: (a, b) => { read.push(b - a); return blob.slice(a, b); } };
+  const files = await core.zipReadFile(spy);
+  assert.deepEqual(files.map((f) => f.name.split('/').pop()).sort(), ['followers_1.json', 'following.json']);
+  assert.deepEqual(core.parsePending(files.find((f) => /following/.test(f.name)).text), [{ u: 'alice', ts: 1700000000000 }]);
+  assert.ok(!read.includes(5000), 'the media entry is never read');
+  const picked = await core.zipReadFile(blob, (all) => all.filter((e) => /followers_1/.test(e.name)));
+  assert.deepEqual(picked, [{ name: 'connections/followers_and_following/followers_1.json', text: '[]' }]);
+  assert.equal(await core.zipReadFile(new Blob(['not a zip'])), null);
+});

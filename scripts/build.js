@@ -32,7 +32,15 @@ function build() {
     bundle,
   ].join('\n');
   const bookmarklet = 'javascript:' + encodeURIComponent('window.FBC_HOST="bookmarklet";' + bundle);
-  return { version, bundle, userscript, bookmarklet };
+  return { version, bundle, userscript, bookmarklet, web: withCore(read('web/index.html'), read('extension/core.js')) };
+}
+
+// The export reader is one file that works offline, so core.js is copied into it between its markers.
+const CORE_BLOCK = /\/\* core:begin[^*]*\*\/[\s\S]*?\/\* core:end \*\//;
+function withCore(html, core) {
+  if (!CORE_BLOCK.test(html)) throw new Error('web/index.html has no core:begin / core:end markers');
+  const block = '/* core:begin. Copied from extension/core.js by scripts/build.js; edit it there. */\n' + core.trimEnd() + '\n/* core:end */';
+  return html.replace(CORE_BLOCK, () => block);
 }
 
 function write(rel, text) {
@@ -49,8 +57,9 @@ if (require.main === module) {
     write('dist/follow-back-checker.user.js', out.userscript),
     write('dist/bookmarklet.txt', out.bookmarklet),
     write('android/app/src/main/assets/checker.js', out.bundle),
+    write('web/index.html', out.web),
   ];
   for (const p of written) console.log('wrote', path.relative(root, p), fs.statSync(p).size, 'bytes');
 }
 
-module.exports = { build };
+module.exports = { build, withCore };

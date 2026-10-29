@@ -59,7 +59,7 @@ These are Instagram's internal web endpoints, not an official API. The tool pace
 
 ```sh
 npm test        # unit tests for the pure logic, the translations and the bundle
-npm run build   # dist/checker.js, dist/follow-back-checker.user.js, dist/bookmarklet.txt, android assets
+npm run build   # dist/checker.js, dist/follow-back-checker.user.js, dist/bookmarklet.txt, android assets, web/index.html
 ```
 
 Layout:
@@ -67,7 +67,7 @@ Layout:
 - `extension/` is the source of truth: `core.js` (pure logic), `i18n.js` (strings), `styles.js` (CSS), `content.js` (panel and requests), `background.js`, `manifest.json`.
 - `scripts/build.js` concatenates the sources into one file for the other hosts. Built files are committed; CI fails if they are stale.
 - `android/` is the app (Kotlin, one activity with a WebView). CI builds it; a `v*` tag builds a signed release and attaches the APK.
-- `web/index.html` is the offline export reader.
+- `web/index.html` is the offline export reader. The build copies `core.js` into it between its `core:begin` / `core:end` markers, so it reads the export exactly like the panel and needs nothing from the network.
 - `tests/` run with Node's built-in test runner.
 
 If Instagram changes its site, the endpoints and headers are in the `API` constant at the top of `extension/content.js`.

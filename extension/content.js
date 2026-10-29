@@ -15,7 +15,7 @@
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipText, shouldAutoCheck, autoCheckDefault, parseRelease, pickExportEntry } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, zipReadFile, shouldAutoCheck, autoCheckDefault, parseRelease, pickExportEntry } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -865,7 +865,7 @@
       const head = new Uint8Array(await f.slice(0, 2).arrayBuffer());
       if (head[0] === 0x50 && head[1] === 0x4b) {
         if (typeof DecompressionStream !== 'function') { toast(t('toastZipOld')); return; }
-        const files = await readExportZip(f, (entries) => [pickExportEntry(entries, 'pending_follow_requests'), pickExportEntry(entries, 'recently_unfollowed_profiles')].filter(Boolean));
+        const files = await zipReadFile(f, (entries) => [pickExportEntry(entries, 'pending_follow_requests'), pickExportEntry(entries, 'recently_unfollowed_profiles')].filter(Boolean));
         const pend = (files || []).find((x) => /pending_follow_requests/i.test(x.name));
         if (!pend) { toast(t('zipNoPending')); return; }
         text = pend.text;
@@ -2248,23 +2248,6 @@
     state.dates = applyDateEvents(state.dates, events);
     updateDatesStatus();
   }
-  // Reads the list files out of an export zip through File.slice, so the media inside is never loaded.
-  // pick: which entries to read, the list files when not given.
-  async function readExportZip(file, pick) {
-    const size = file.size;
-    const tail = new Uint8Array(await file.slice(Math.max(0, size - 65557), size).arrayBuffer());
-    const e = zipFindEocd(tail, size);
-    if (!e) return null;
-    const cd = new Uint8Array(await file.slice(e.cdOffset, e.cdOffset + e.cdSize).arrayBuffer());
-    const out = [];
-    for (const c of (pick || exportListEntries)(zipCentral(cd, e.count))) {
-      const at = zipDataStart(new Uint8Array(await file.slice(c.lho, c.lho + 30).arrayBuffer()));
-      if (at < 0) continue;
-      const data = new Uint8Array(await file.slice(c.lho + at, c.lho + at + c.csize).arrayBuffer());
-      out.push({ name: c.name, text: await zipText({ method: c.method, data }) });
-    }
-    return out;
-  }
   async function importDatesFile() {
     const f = ui.datesFile.files && ui.datesFile.files[0];
     ui.datesFile.value = '';
@@ -2274,7 +2257,7 @@
       const head = new Uint8Array(await f.slice(0, 2).arrayBuffer());
       if (head[0] === 0x50 && head[1] === 0x4b) {
         if (typeof DecompressionStream !== 'function') { toast(t('toastZipOld')); return; }
-        files = await readExportZip(f);
+        files = await zipReadFile(f);
         if (!files) { toast(t('toastDatesNone')); return; }
       } else {
         files = [{ name: f.name, text: await f.text() }];
