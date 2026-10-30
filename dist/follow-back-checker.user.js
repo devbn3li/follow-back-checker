@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Follow Back Checker
 // @namespace    https://github.com/devbn3li/follow-back-checker
-// @version      1.11.2
+// @version      1.11.3
 // @description  Who you follow that does not follow you back, from your own logged-in instagram.com session. Nothing leaves the browser.
 // @author       devbn3li
 // @match        https://www.instagram.com/*
@@ -11,8 +11,8 @@
 // @downloadURL  https://raw.githubusercontent.com/devbn3li/follow-back-checker/main/dist/follow-back-checker.user.js
 // ==/UserScript==
 
-/* Follow Back Checker 1.11.2. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
-if (typeof window !== 'undefined') window.FBC_VERSION = '1.11.2';
+/* Follow Back Checker 1.11.3. Built from extension/ by scripts/build.js; do not edit by hand. https://github.com/devbn3li/follow-back-checker */
+if (typeof window !== 'undefined') window.FBC_VERSION = '1.11.3';
 // Panel styles. Injected into a shadow root by content.js, so Instagram's own CSS cannot leak in
 // and a strict page CSP cannot block them (they go in through a constructed stylesheet).
 var FBC_CSS = `
