@@ -73,6 +73,8 @@ button, input, select { font: inherit; color: inherit; }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .btn.primary:disabled { opacity: 0.6; cursor: progress; }
 .btn.small { padding: 5px 10px; font-size: 13px; }
+.batch { display: inline-flex; gap: 6px; align-items: center; }
+.btn.arm { background: var(--danger); color: var(--bg); border-color: var(--danger); }
 
 .progress { padding: 0 16px 10px; display: grid; gap: 6px; }
 .ptext { font-size: 13px; color: var(--muted); }

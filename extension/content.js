@@ -15,7 +15,7 @@
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, slimSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, zipReadFile, shouldAutoCheck, autoCheckDefault, parseRelease, pickExportEntry } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, slimSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, SPEEDS, speedOf, nextGap, actionWait, dayLeft, batchEstimate, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, zipReadFile, shouldAutoCheck, autoCheckDefault, parseRelease, pickExportEntry } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -41,7 +41,8 @@
   // Unfollow: one account per tap, confirmed, spaced out, capped, verified, and paused when Instagram objects.
   // docId is the persisted GraphQL query behind instagram.com's own Unfollow button; Instagram rotates it now
   // and then. The older REST route is tried first and needs no such id.
-  const ACT = { gapMs: 20000, perHour: 30, perDay: 100, blockPauseMs: 2 * 60 * 60 * 1000, rateLimitPauseMs: 30 * 60 * 1000, docId: '27789106940691111', friendlyName: 'usePolarisUnfollowMutation' };
+  // The gap and the hourly and daily caps come from the speed chosen in Settings (core's SPEEDS).
+  const ACT = { blockPauseMs: 2 * 60 * 60 * 1000, rateLimitPauseMs: 30 * 60 * 1000, docId: '27789106940691111', friendlyName: 'usePolarisUnfollowMutation' };
 
   // --- language and formatting
   let lang = String(navigator.language || '').toLowerCase().startsWith('ar') ? 'ar' : 'en';
@@ -347,12 +348,12 @@
     changes: { label: 'tileHistory', title: 'titleHistory', empty: '' },
   };
   const freshActions = () => ({ times: [], pausedUntil: 0, warned: false });
-  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), loops: new Map(), react: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0, countsPausedUntil: 0, dates: null, autoCheck: false, upd: { at: 0, seen: '', rel: null } };
+  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), loops: new Map(), react: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0, countsPausedUntil: 0, dates: null, autoCheck: false, speed: 'safe', batch: null, upd: { at: 0, seen: '', rel: null } };
   const live = { following: 0, followers: 0 };
   const ui = {};
   // Small preferences, remembered across visits: language, panel width, and the pause after Instagram asks us to slow down.
   const UI_KEY = 'fbc.ui';
-  function saveUi() { storageSet({ [UI_KEY]: { lang, width: state.width, cooldownUntil: state.cooldownUntil, countsPausedUntil: state.countsPausedUntil, autoCheck: state.autoCheck, upd: state.upd } }); }
+  function saveUi() { storageSet({ [UI_KEY]: { lang, width: state.width, cooldownUntil: state.cooldownUntil, countsPausedUntil: state.countsPausedUntil, autoCheck: state.autoCheck, speed: state.speed, upd: state.upd } }); }
   let prefsLoaded;
   const prefsReady = new Promise((resolve) => { prefsLoaded = resolve; }); // the automatic check waits for the settings
   const WIDTH = { def: 640, min: 380, max: 1100, narrowBelow: 560 };
@@ -445,7 +446,12 @@
     ui.protectedBtn = h('button', { class: 'btn small', type: 'button', onclick: () => { state.tab = 'protected'; renderList(); } });
     ui.pendingBtn = h('button', { class: 'btn small', type: 'button', onclick: () => { state.tab = 'pending'; renderList(); } });
     ui.logBtn = h('button', { class: 'btn small', type: 'button', onclick: () => { state.tab = 'actions'; renderList(); } });
-    ui.toolbar = h('div', { class: 'toolbar' }, ui.search, ui.hideDoneWrap, ui.showProtectedWrap, ui.onlyLeftWrap, ui.kindFilter, ui.sortSel, ui.countsBtn, ui.evFilter, ui.copy, ui.download, ui.protectedBtn, ui.pendingBtn, ui.logBtn, ui.share);
+    ui.batchCount = h('select', { class: 'field sel' }, [25, 50, 100].map((n) => h('option', { value: String(n) }, String(n))));
+    ui.batchCount.value = '50';
+    ui.batchBtn = h('button', { class: 'btn small', type: 'button', onclick: () => startBatch() });
+    ui.batchWrap = h('span', { class: 'batch', hidden: true }, ui.batchBtn, ui.batchCount);
+    ui.batchStatus = h('div', { class: 'hint', role: 'status', hidden: true });
+    ui.toolbar = h('div', { class: 'toolbar' }, ui.search, ui.hideDoneWrap, ui.showProtectedWrap, ui.onlyLeftWrap, ui.kindFilter, ui.sortSel, ui.countsBtn, ui.batchWrap, ui.evFilter, ui.copy, ui.download, ui.protectedBtn, ui.pendingBtn, ui.logBtn, ui.share);
     ui.listTitle = h('div', { class: 'listtitle' });
     ui.chart = h('div', { class: 'charthost', hidden: true });
     // Protected accounts: paste, import, export, and the list itself.
@@ -472,12 +478,16 @@
     const app = hostApp();
     ui.reminderWrap = h('label', { class: 'chk', hidden: !(app && typeof app.setReminder === 'function') }, ui.reminder, ui.reminderText);
     if (app && typeof app.reminderEnabled === 'function') { try { ui.reminder.checked = app.reminderEnabled() !== false; } catch (e) { ui.reminder.checked = true; } }
+    ui.speedOpts = Object.keys(SPEEDS).map((v) => h('option', { value: v }));
+    ui.speedSel = h('select', { class: 'field sel', onchange: () => { state.speed = SPEEDS[ui.speedSel.value] ? ui.speedSel.value : 'safe'; saveUi(); updateSpeedHint(); renderList(); } }, ui.speedOpts);
+    ui.speedText = h('span');
+    ui.speedHint = h('div', { class: 'hint' });
     ui.datesHint = h('div', { class: 'hint' });
     ui.datesFile = h('input', { type: 'file', accept: '.zip,.json,.html,.htm,application/zip,application/x-zip-compressed,application/json,text/html', hidden: true, onchange: () => importDatesFile() });
     ui.datesImport = h('button', { class: 'btn small', type: 'button', onclick: () => ui.datesFile.click() });
     ui.datesStatus = h('div', { class: 'hint' });
     ui.picStatus = h('div', { class: 'hint', hidden: true });
-    ui.settings = h('div', { class: 'settings', hidden: true }, ui.settingsTitle, h('label', { class: 'chk' }, ui.autoCheck, ui.autoCheckText), ui.reminderWrap, ui.datesHint, h('div', { class: 'toolbar' }, ui.datesImport, ui.datesFile), ui.datesStatus, ui.picStatus);
+    ui.settings = h('div', { class: 'settings', hidden: true }, ui.settingsTitle, h('label', { class: 'chk' }, ui.autoCheck, ui.autoCheckText), ui.reminderWrap, h('label', { class: 'chk' }, ui.speedText, ui.speedSel), ui.speedHint, ui.datesHint, h('div', { class: 'toolbar' }, ui.datesImport, ui.datesFile), ui.datesStatus, ui.picStatus);
     // Update notice: shown when GitHub's latest release is newer than what runs here.
     ui.updText = h('span', { class: 'updtext' });
     ui.updGet = h('button', { class: 'btn small primary', type: 'button', onclick: () => openUpdate() });
@@ -486,7 +496,7 @@
     ui.list = h('div', { class: 'list' });
     ui.empty = h('div', { class: 'empty', hidden: true });
     ui.notice = h('div', { class: 'notice', hidden: true });
-    ui.results = h('div', { class: 'results', hidden: true }, ui.ledger, ui.notice, ui.tiles, ui.toolbar, ui.listTitle, ui.chart, ui.prot, ui.pend, ui.list);
+    ui.results = h('div', { class: 'results', hidden: true }, ui.ledger, ui.notice, ui.tiles, ui.toolbar, ui.batchStatus, ui.listTitle, ui.chart, ui.prot, ui.pend, ui.list);
     ui.toast = h('div', { class: 'toast', role: 'status', hidden: true });
     ui.modalTitle = h('div', { class: 'mtitle' });
     ui.modalText = h('div', { class: 'mtext' });
@@ -532,6 +542,9 @@
       if ((prefs.lang === 'ar' || prefs.lang === 'en') && prefs.lang !== lang) setLang(prefs.lang, true);
       state.autoCheck = typeof prefs.autoCheck === 'boolean' ? prefs.autoCheck : autoCheckDefault(HOST);
       ui.autoCheck.checked = state.autoCheck;
+      state.speed = SPEEDS[prefs.speed] ? prefs.speed : 'safe';
+      ui.speedSel.value = state.speed;
+      updateSpeedHint();
       const upd = prefs.upd && typeof prefs.upd === 'object' ? prefs.upd : {};
       state.upd = { at: Number(upd.at) || 0, seen: typeof upd.seen === 'string' ? upd.seen : '', rel: upd.rel && typeof upd.rel === 'object' ? upd.rel : null };
       prefsLoaded();
@@ -552,6 +565,13 @@
     ui.autoCheckText.textContent = t('autoCheck', { d: Math.round(AUTO.maxAgeMs / 86400000) });
     ui.reminderText.textContent = t('reminder');
     ui.datesHint.textContent = t('datesHint');
+    ui.speedText.textContent = t('speedLabel');
+    const speedKeys = { safe: 'speedSafe', medium: 'speedMedium', fast: 'speedFast' };
+    ui.speedOpts.forEach((o) => { o.textContent = t(speedKeys[o.value]); });
+    updateSpeedHint();
+    ui.batchCount.title = t('batchCountTitle');
+    ui.batchCount.setAttribute('aria-label', t('batchCountTitle'));
+    labelBatch();
     ui.datesImport.textContent = t('datesImport');
     ui.updGet.textContent = t('updGet');
     ui.updLater.textContent = t('updLater');
@@ -1386,6 +1406,7 @@
     ui.sortSel.hidden = history || side;
     ui.countsBtn.hidden = history || side;
     ui.showProtectedWrap.hidden = state.tab !== 'notback';
+    ui.batchWrap.hidden = state.tab !== 'notback' && !state.batch;
     const leftRows = state.tab === 'fans' ? state.lists.fans.filter((r) => state.left.has(r.u)) : whoLeft(state.lists.notback.filter((r) => !isProtected(r.u)), state.left);
     ui.onlyLeftWrap.hidden = (state.tab !== 'notback' && state.tab !== 'fans') || !leftRows.length;
     if (ui.onlyLeftWrap.hidden && state.onlyLeft) { state.onlyLeft = false; ui.onlyLeft.checked = false; } // a hidden filter must not keep filtering
@@ -1593,6 +1614,7 @@
   // auto: started by the panel itself (see maybeAutoCheck); the button at the bottom then carries the result.
   async function startCheck(auto) {
     if (state.running) return;
+    if (state.batch) { if (!auto) toast(t('batchRunning')); return; }
     const uid = cookie('ds_user_id');
     if (uid !== state.uid) await loadAccount(uid);
     if (state.running) return;
@@ -1847,21 +1869,26 @@
   // --- unfollow, one account per tap
   class ActionBlocked extends Error { constructor(m) { super(m); this.name = 'ActionBlocked'; } }
   function saveActions() { if (state.uid) storageSet({ [actStoreKey(state.uid)]: state.actions }); }
+  const speed = () => speedOf(state.speed);
   function actionQuota() {
-    const now = Date.now();
+    const now = Date.now(), sp = speed();
     state.actions.times = state.actions.times.filter((x) => typeof x === 'number' && x > now - 86400000);
     const hour = state.actions.times.filter((x) => x > now - 3600000).length;
-    return { hourLeft: Math.max(0, ACT.perHour - hour), dayLeft: Math.max(0, ACT.perDay - state.actions.times.length), last: state.actions.times.length ? state.actions.times[state.actions.times.length - 1] : 0 };
+    return { hourLeft: Math.max(0, sp.perHour - hour), dayLeft: dayLeft(state.actions.times, now, sp) };
   }
   // Why an unfollow cannot happen right now, or null when it can.
   function unfollowBlocker() {
-    if (Date.now() < state.actions.pausedUntil) return t('unfollowBlocked', { t: fmtT(state.actions.pausedUntil) });
-    const q = actionQuota();
-    if (q.last && Date.now() - q.last < ACT.gapMs) return t('unfollowWait', { s: Math.ceil((ACT.gapMs - (Date.now() - q.last)) / 1000) });
-    if (q.hourLeft <= 0) return t('unfollowLimitHour', { n: ACT.perHour });
-    if (q.dayLeft <= 0) return t('unfollowLimitDay', { n: ACT.perDay });
+    if (state.batch) return t('batchRunning');
+    const sp = speed();
+    const w = actionWait(state.actions.times, Date.now(), sp, state.actions.pausedUntil);
+    if (w.why === 'paused') return t('unfollowBlocked', { t: fmtT(state.actions.pausedUntil) });
+    if (w.why === 'gap') return t('unfollowWait', { s: Math.ceil(w.ms / 1000) });
+    if (w.why === 'hour') return t('unfollowLimitHour', { n: sp.perHour });
+    if (w.why === 'day') return t('unfollowLimitDay', { n: sp.perDay });
     return null;
   }
+  // The first warning before any action, with the numbers of the chosen speed.
+  const warnVars = () => { const sp = speed(); return { h: sp.perHour, d: sp.perDay, s: Math.round(sp.minMs / 1000) }; };
   async function postForm(path, headers, params) {
     let res;
     try {
@@ -2021,7 +2048,7 @@
     btn.classList.remove('arm');
     btn.textContent = t('follow');
     if (!state.actions.warned) {
-      const ok = await askConfirm('unfollowWarnTitle', 'unfollowWarn', 'unfollowWarnOk', { h: ACT.perHour, d: ACT.perDay });
+      const ok = await askConfirm('unfollowWarnTitle', 'unfollowWarn', 'unfollowWarnOk', warnVars());
       if (!ok) return;
       state.actions.warned = true;
       saveActions();
@@ -2064,7 +2091,7 @@
     btn.classList.remove('arm');
     btn.textContent = t('unfollow');
     if (!state.actions.warned) {
-      const ok = await askConfirm('unfollowWarnTitle', 'unfollowWarn', 'unfollowWarnOk', { h: ACT.perHour, d: ACT.perDay });
+      const ok = await askConfirm('unfollowWarnTitle', 'unfollowWarn', 'unfollowWarnOk', warnVars());
       if (!ok) return;
       state.actions.warned = true;
       saveActions();
@@ -2095,10 +2122,111 @@
       btn.textContent = t('unfollow');
     }
   }
+  // --- automatic unfollow: the first N accounts of "don't follow you back" as shown (filters and sort
+  // included), one at a time at the chosen speed, each checked with Instagram right before, like a tap.
+  const fmtDur = (ms) => { const m = Math.max(1, Math.round(ms / 60000)); return m < 90 ? t('durMin', { n: num(m) }) : t('durHours', { n: (m / 60).toFixed(1) }); };
+  function updateSpeedHint() {
+    const key = { safe: 'speedHintSafe', medium: 'speedHintMedium', fast: 'speedHintFast' }[state.speed] || 'speedHintSafe';
+    ui.speedHint.textContent = t(key);
+  }
+  function labelBatch() {
+    const b = state.batch;
+    ui.batchBtn.textContent = b ? t('batchStop', { a: num(b.done), b: num(b.total) }) : t('batchStart');
+    ui.batchBtn.classList.toggle('arm', !!b);
+    ui.batchCount.disabled = !!b;
+  }
+  function batchSay(text) { ui.batchStatus.textContent = text; ui.batchStatus.hidden = !text; }
+  async function startBatch() {
+    if (state.batch) { state.batch.cancelled = true; return; }
+    if (state.running) { toast(t('unfollowBusy')); return; }
+    if (state.countsRun) { toast(t('batchCountsBusy')); return; }
+    if (!state.lists || state.tab !== 'notback') return;
+    if (Date.now() < state.actions.pausedUntil) { toast(t('unfollowBlocked', { t: fmtT(state.actions.pausedUntil) })); return; }
+    const sp = speed();
+    const left = dayLeft(state.actions.times, Date.now(), sp);
+    if (!left) { toast(t('unfollowLimitDay', { n: sp.perDay })); return; }
+    const rows = listRows().filter((r) => r.id && !isProtected(r.u)).slice(0, Math.min(Number(ui.batchCount.value) || 25, left));
+    if (!rows.length) { toast(t('batchNothing')); return; }
+    const vars = { n: num(rows.length), a: Math.round(sp.minMs / 1000), b: Math.round(sp.maxMs / 1000), h: sp.perHour, eta: fmtDur(batchEstimate(rows.length, sp, state.actions.times, Date.now(), 2000)) };
+    if (!await askConfirm('batchTitle', state.speed === 'safe' ? 'batchConfirm' : 'batchConfirmRisky', 'batchOk', vars)) return;
+    if (state.batch || state.running) return;
+    state.actions.warned = true;
+    saveActions();
+    runBatch(rows, sp);
+  }
+  async function runBatch(rows, sp) {
+    const uid = state.uid;
+    const b = { cancelled: false, done: 0, skipped: 0, total: rows.length };
+    state.batch = b;
+    labelBatch();
+    let gap = nextGap(sp, Math.random), fails = 0, end = '', why = '';
+    try {
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        // Wait for the gap and the caps, a second at a time so Stop and an account switch are seen quickly.
+        for (;;) {
+          if (b.cancelled || state.uid !== uid) break;
+          const w = actionWait(state.actions.times, Date.now(), sp, state.actions.pausedUntil, gap);
+          if (!w.ms) break;
+          if (w.why === 'day' || w.why === 'paused') { end = w.why; break; }
+          batchSay(w.why === 'hour'
+            ? t('batchHour', { a: num(b.done), b: num(b.total), t: fmtT(Date.now() + w.ms) })
+            : t('batchNext', { a: num(b.done), b: num(b.total), s: Math.ceil(w.ms / 1000) }));
+          await sleep(Math.min(1000, w.ms));
+        }
+        if (end || b.cancelled || state.uid !== uid) break;
+        // Already handled since the batch started: protected meanwhile, or no longer in the list.
+        if (isProtected(r.u) || !state.lists || !state.lists.notback.some((x) => x.u === r.u)) { b.skipped++; continue; }
+        batchSay(t('batchNow', { u: r.u, i: num(i + 1), b: num(b.total) }));
+        try {
+          if (await preflight('unfollow', r) !== 'go') {
+            b.skipped++;
+            renderList();
+            await sleep(1500 + Math.random() * 1500); // the check itself was a request; space the next one
+            continue;
+          }
+          await unfollowRequest(r);
+          state.actions.times.push(Date.now());
+          saveActions();
+          addLog('unfollow', r);
+          recordUnfollow(r);
+          b.done++;
+          fails = 0;
+          gap = nextGap(sp, Math.random);
+          renderList();
+        } catch (e) {
+          if (e instanceof ActionBlocked || e instanceof RateLimited) {
+            state.actions.pausedUntil = Date.now() + (e instanceof ActionBlocked ? ACT.blockPauseMs : ACT.rateLimitPauseMs);
+            saveActions();
+            end = 'paused';
+            break;
+          }
+          why = e && e.message ? e.message : String(e);
+          b.skipped++;
+          // A login problem, or three failures in a row, means something is off: stop rather than push on.
+          if (e instanceof AuthError || ++fails >= 3) { end = 'error'; break; }
+        }
+        labelBatch();
+      }
+    } finally {
+      state.batch = null;
+      labelBatch();
+      const v = { a: num(b.done), b: num(b.total), t: fmtT(state.actions.pausedUntil), r: why };
+      const msg = end === 'paused' ? t('batchEndPaused', v)
+        : end === 'day' ? t('batchEndDay', v)
+        : end === 'error' ? t('batchEndError', v)
+        : b.cancelled || state.uid !== uid ? t('batchEndStopped', v)
+        : t('batchEndDone', v);
+      batchSay(msg + (b.skipped ? ' ' + t('batchSkipped', { n: num(b.skipped) }) : ''));
+      toast(msg);
+      renderList();
+    }
+  }
   // Followers and following of the accounts shown, one paced request each, at most COUNTS.max per tap.
   async function loadCounts() {
     if (state.countsRun) { state.countsRun.cancelled = true; return; }
     if (!state.lists || state.running) { if (state.running) toast(t('unfollowBusy')); return; }
+    if (state.batch) { toast(t('batchRunning')); return; }
     if (Date.now() < state.countsPausedUntil) { toast(t('countsPaused', { t: fmtT(state.countsPausedUntil) })); return; }
     const fresh = (u) => state.counts[u] && Date.now() - state.counts[u].at < COUNTS.ttlMs;
     const todo = listRows().filter((r) => r.id && !fresh(r.u)).slice(0, COUNTS.max);
@@ -2186,7 +2314,7 @@
   // Runs one write action under the shared limits: the warning once, the blocker, then the pre-check, the request and the log.
   async function runAction(kind, r, btn, label, undoOf) {
     if (!state.actions.warned) {
-      const ok = await askConfirm('unfollowWarnTitle', 'unfollowWarn', 'unfollowWarnOk', { h: ACT.perHour, d: ACT.perDay });
+      const ok = await askConfirm('unfollowWarnTitle', 'unfollowWarn', 'unfollowWarnOk', warnVars());
       if (!ok) return false;
       state.actions.warned = true;
       saveActions();
@@ -2323,7 +2451,7 @@
     await prefsReady;
     const uid = state.uid;
     if (!uid || uid !== cookie('ds_user_id')) return;
-    const due = shouldAutoCheck({ enabled: state.autoCheck, lastAt: state.snap ? state.snap.at : 0, now: Date.now(), running: state.running, cooldownUntil: state.cooldownUntil, maxAgeMs: AUTO.maxAgeMs, ranAlready: autoRan.has(uid) });
+    const due = shouldAutoCheck({ enabled: state.autoCheck, lastAt: state.snap ? state.snap.at : 0, now: Date.now(), running: state.running || !!state.batch, cooldownUntil: state.cooldownUntil, maxAgeMs: AUTO.maxAgeMs, ranAlready: autoRan.has(uid) });
     if (!due) return;
     autoRan.add(uid);
     await sleep(AUTO.delayMs);

@@ -363,6 +363,43 @@
   }
 
   // The log of actions taken from the tool: newest last, capped.
+  // Action speeds for unfollow and follow back, one account at a time. Instagram counts actions per hour
+  // and per day, so the caps matter more than the gap; safe is the default, the others are a choice.
+  const SPEEDS = {
+    safe: { minMs: 20000, maxMs: 40000, perHour: 30, perDay: 100 },
+    medium: { minMs: 8000, maxMs: 15000, perHour: 60, perDay: 150 },
+    fast: { minMs: 3000, maxMs: 5000, perHour: 200, perDay: 200 },
+  };
+  const speedOf = (name) => (Object.prototype.hasOwnProperty.call(SPEEDS, name) ? SPEEDS[name] : SPEEDS.safe);
+  // A random gap between two actions. rand: Math.random, or a test's stand-in.
+  const nextGap = (sp, rand) => Math.round(sp.minMs + (sp.maxMs - sp.minMs) * rand());
+  // How long until the next action may run, and the reason: { ms, why } with why one of '', 'paused',
+  // 'gap', 'hour', 'day'. times: when earlier actions ran; gap: the one drawn after the last (minMs if none).
+  function actionWait(times, now, sp, pausedUntil, gap) {
+    const day = (times || []).filter((x) => typeof x === 'number' && x > now - 86400000).sort((a, b) => a - b);
+    const hour = day.filter((x) => x > now - 3600000);
+    const waits = [{ why: 'paused', ms: (pausedUntil || 0) - now }];
+    if (day.length) waits.push({ why: 'gap', ms: day[day.length - 1] + (gap == null ? sp.minMs : gap) - now });
+    // The cap frees a slot when the oldest of the last perHour (perDay) actions leaves the window.
+    if (hour.length >= sp.perHour) waits.push({ why: 'hour', ms: hour[hour.length - sp.perHour] + 3600000 - now });
+    if (day.length >= sp.perDay) waits.push({ why: 'day', ms: day[day.length - sp.perDay] + 86400000 - now });
+    const top = waits.reduce((a, b) => (b.ms > a.ms ? b : a));
+    return top.ms > 0 ? { ms: Math.ceil(top.ms), why: top.why } : { ms: 0, why: '' };
+  }
+  // Actions left today at this speed.
+  const dayLeft = (times, now, sp) => Math.max(0, sp.perDay - (times || []).filter((x) => typeof x === 'number' && x > now - 86400000).length);
+  // About how long n actions take from now, with the average gap and stepMs for each action's own requests.
+  function batchEstimate(n, sp, times, now, stepMs) {
+    const done = (times || []).slice();
+    const gap = (sp.minMs + sp.maxMs) / 2;
+    let at = now;
+    for (let i = 0; i < n; i++) {
+      at += actionWait(done, at, sp, 0, gap).ms + (stepMs || 0);
+      done.push(at); // an action is recorded once Instagram answered, and the next gap counts from there
+    }
+    return at - now;
+  }
+
   const UNDO = { unfollow: 'follow', follow: 'unfollow', request: 'cancel', cancel: 'follow' };
   function appendLog(log, entry, cap) {
     const base = Array.isArray(log) ? log.filter((e) => e && typeof e.at === 'number' && typeof e.u === 'string') : [];
@@ -688,5 +725,5 @@
     return out;
   }
 
-  return { pickExportEntry, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipEntries, zipText, zipReadFile, shouldAutoCheck, autoCheckDefault, compareVersions, parseRelease, loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, slimSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
+  return { pickExportEntry, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipEntries, zipText, zipReadFile, shouldAutoCheck, autoCheckDefault, compareVersions, parseRelease, loopsFrom, carryMe, preCheck, SPEEDS, speedOf, nextGap, actionWait, dayLeft, batchEstimate, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, slimSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
 });

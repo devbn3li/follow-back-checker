@@ -642,3 +642,44 @@ test('slimSnap keeps what a comparison needs and drops pictures and ids', () => 
   const who = (d) => Object.fromEntries(Object.entries(d).map(([k, v]) => [k, Array.isArray(v) ? v.map((r) => r.u) : v]));
   assert.deepEqual(who(core.diff(core.slimSnap(prev), last)), who(core.diff(prev, last)), 'the same changes either way');
 });
+
+test('speedOf falls back to safe, nextGap stays inside the speed', () => {
+  assert.equal(core.speedOf('fast'), core.SPEEDS.fast);
+  assert.equal(core.speedOf('nope'), core.SPEEDS.safe);
+  assert.equal(core.speedOf('constructor'), core.SPEEDS.safe);
+  for (const name of Object.keys(core.SPEEDS)) {
+    const sp = core.SPEEDS[name];
+    assert.equal(core.nextGap(sp, () => 0), sp.minMs);
+    assert.equal(core.nextGap(sp, () => 0.999999), sp.maxMs);
+    assert.ok(sp.minMs < sp.maxMs && sp.perHour <= sp.perDay, name);
+  }
+});
+
+test('actionWait: pause, gap, hourly and daily caps, longest wins', () => {
+  const sp = { minMs: 20000, maxMs: 40000, perHour: 3, perDay: 5 };
+  const now = 10 * 86400000;
+  assert.deepEqual(core.actionWait([], now, sp, 0), { ms: 0, why: '' });
+  assert.deepEqual(core.actionWait([now - 5000], now, sp, 0), { ms: 15000, why: 'gap' }, 'manual: the minimum gap');
+  assert.deepEqual(core.actionWait([now - 5000], now, sp, 0, 31000), { ms: 26000, why: 'gap' }, 'batch: the drawn gap');
+  assert.deepEqual(core.actionWait([now - 60000], now, sp, now + 1000), { ms: 1000, why: 'paused' });
+  // Three in the last hour: the next slot opens when the oldest of them is an hour old.
+  assert.deepEqual(core.actionWait([now - 3000000, now - 2000000, now - 1000000], now, sp, 0), { ms: 600000, why: 'hour' });
+  // Five today: wait for the oldest of the last five to leave the day.
+  const day = [now - 80000000, now - 70000000, now - 60000000, now - 50000000, now - 40000000];
+  assert.deepEqual(core.actionWait(day, now, sp, 0), { ms: 6400000, why: 'day' });
+  assert.equal(core.dayLeft(day, now, sp), 0);
+  assert.equal(core.dayLeft([now - 90000000], now, sp), 5, 'older than a day does not count');
+});
+
+test('batchEstimate follows the gaps and the hourly cap', () => {
+  const now = 1e12;
+  const sp = { minMs: 10000, maxMs: 30000, perHour: 3, perDay: 100 };
+  assert.equal(core.batchEstimate(0, sp, [], now, 0), 0);
+  assert.equal(core.batchEstimate(3, sp, [], now, 0), 40000, 'first now, then two average gaps');
+  assert.equal(core.batchEstimate(4, sp, [], now, 0), 3600000, 'the fourth waits for the first to be an hour old');
+  assert.equal(core.batchEstimate(2, sp, [], now, 1000), 22000, 'each action adds its own requests');
+  const safe = core.SPEEDS.safe;
+  const hours = core.batchEstimate(100, safe, [], now, 2000) / 3600000;
+  assert.ok(hours > 3 && hours < 3.6, 'safe: 100 in a little over three hours, got ' + hours);
+  assert.ok(core.batchEstimate(100, core.SPEEDS.fast, [], now, 2000) < 15 * 60000, 'fast: minutes');
+});
