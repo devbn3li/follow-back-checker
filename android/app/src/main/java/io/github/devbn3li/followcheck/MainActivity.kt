@@ -77,7 +77,8 @@ class MainActivity : AppCompatActivity() {
         // window.FollowCheckHost: saves the checker's exports into Downloads (saveText, saveBase64, saveUrl),
         // records checks and the reminder setting for the weekly reminder (noteCheck, setReminder,
         // reminderEnabled), reports the installed version and the latest GitHub release (appVersion,
-        // latestRelease) and opens links in the phone's browser (openExternal).
+        // latestRelease), opens links in the phone's browser (openExternal) and keeps the checker's data
+        // in the app's own files (storeGet, storeSet, storeRemove).
         web.addJavascriptInterface(HostBridge(this), "FollowCheckHost")
 
         script = ScriptStore.load(this)

@@ -57,6 +57,13 @@
   }
 
   const isSnap = (s) => !!(s && typeof s.at === 'number' && Array.isArray(s.following) && Array.isArray(s.followers));
+  // The snapshot before the last one is only compared against (diff, history seeding), so it is kept without
+  // the picture links and ids that make up most of a snapshot's size.
+  function slimSnap(snap) {
+    if (!isSnap(snap)) return null;
+    const slim = (rows) => rows.filter((r) => r && typeof r.u === 'string').map((r) => ({ u: r.u, name: r.name || '', priv: !!r.priv }));
+    return Object.assign({}, snap, { following: slim(snap.following), followers: slim(snap.followers) });
+  }
 
   // History: one point per check plus one event per change.
   function pointFrom(snap) {
@@ -681,5 +688,5 @@
     return out;
   }
 
-  return { pickExportEntry, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipEntries, zipText, zipReadFile, shouldAutoCheck, autoCheckDefault, compareVersions, parseRelease, loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
+  return { pickExportEntry, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipEntries, zipText, zipReadFile, shouldAutoCheck, autoCheckDefault, compareVersions, parseRelease, loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, slimSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
 });

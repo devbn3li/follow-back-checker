@@ -628,3 +628,17 @@ test('zipReadFile reads only the picked entries of a zip Blob, through slice', a
   assert.deepEqual(picked, [{ name: 'connections/followers_and_following/followers_1.json', text: '[]' }]);
   assert.equal(await core.zipReadFile(new Blob(['not a zip'])), null);
 });
+
+test('slimSnap keeps what a comparison needs and drops pictures and ids', () => {
+  const snap = { at: 5, uid: '9', me: 'me', following: [{ u: 'a', id: '1', name: 'A', priv: true, ver: true, pic: 'https://x/very/long' }], followers: [{ u: 'b', id: '2', pic: 'https://y' }, null] };
+  const slim = core.slimSnap(snap);
+  assert.deepEqual(slim, { at: 5, uid: '9', me: 'me', following: [{ u: 'a', name: 'A', priv: true }], followers: [{ u: 'b', name: '', priv: false }] });
+  assert.ok(core.isSnap(slim));
+  assert.equal(snap.following[0].pic, 'https://x/very/long', 'the snapshot itself is untouched');
+  assert.equal(core.slimSnap(null), null);
+  assert.equal(core.slimSnap({ at: 1 }), null);
+  const prev = { at: 1, following: [{ u: 'a' }, { u: 'gone' }], followers: [{ u: 'gone' }] };
+  const last = { at: 2, following: [{ u: 'a' }], followers: [] };
+  const who = (d) => Object.fromEntries(Object.entries(d).map(([k, v]) => [k, Array.isArray(v) ? v.map((r) => r.u) : v]));
+  assert.deepEqual(who(core.diff(core.slimSnap(prev), last)), who(core.diff(prev, last)), 'the same changes either way');
+});

@@ -275,6 +275,13 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   }
 
   const isSnap = (s) => !!(s && typeof s.at === 'number' && Array.isArray(s.following) && Array.isArray(s.followers));
+  // The snapshot before the last one is only compared against (diff, history seeding), so it is kept without
+  // the picture links and ids that make up most of a snapshot's size.
+  function slimSnap(snap) {
+    if (!isSnap(snap)) return null;
+    const slim = (rows) => rows.filter((r) => r && typeof r.u === 'string').map((r) => ({ u: r.u, name: r.name || '', priv: !!r.priv }));
+    return Object.assign({}, snap, { following: slim(snap.following), followers: slim(snap.followers) });
+  }
 
   // History: one point per check plus one event per change.
   function pointFrom(snap) {
@@ -899,7 +906,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     return out;
   }
 
-  return { pickExportEntry, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipEntries, zipText, zipReadFile, shouldAutoCheck, autoCheckDefault, compareVersions, parseRelease, loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
+  return { pickExportEntry, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, exportListEntries, zipFindEocd, zipCentral, zipDataStart, zipEntries, zipText, zipReadFile, shouldAutoCheck, autoCheckDefault, compareVersions, parseRelease, loopsFrom, carryMe, preCheck, shortNum, followBackOdds, sortRows, pruneCounts, UNDO, appendLog, markUndone, parsePending, mergePending, num, plural, pct, normalizeUser, derive, diff, isSnap, slimSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, RESERVED, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, goneSet, reactivations, reclassifyEvents };
 });
 
 ;
@@ -1109,6 +1116,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     cardNotback: 'don’t follow back',
     cardWeek: '{n} followers since {since}',
     needUpdate: 'Update the app to save files.',
+    saveFailed: 'Could not save to this device: storage is full. The last check is shown but will not be remembered. Download the lists as CSV to keep them.',
     cardFooter: 'made with Follow Check',
     showName: 'Show my username',
     cardFailed: 'Could not draw the card.',
@@ -1385,6 +1393,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     cardNotback: 'مش بيردوا',
     cardWeek: '{n} متابع من {since}',
     needUpdate: 'حدّث التطبيق علشان تحفظ الملفات.',
+    saveFailed: 'مقدرتش أحفظ على الجهاز: المساحة مليانة. آخر تشيك ظاهر قدامك بس مش هيتحفظ. نزّل القوايم CSV لو عايز تحتفظ بيها.',
     cardFooter: 'اتعمل بـ Follow Check',
     showName: 'اعرض اسمي',
     cardFailed: 'مقدرناش نرسم الكارت.',
@@ -1485,7 +1494,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const CORE = window.FBC_CORE, I18N = window.FBC_I18N;
   if (!CORE || !I18N) return;
   window.__fbcLoaded = true;
-  const { num, plural, pct, normalizeUser, derive, diff, isSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, zipReadFile, shouldAutoCheck, autoCheckDefault, parseRelease, pickExportEntry } = CORE;
+  const { num, plural, pct, normalizeUser, derive, diff, isSnap, slimSnap, pointFrom, eventsFrom, appendHistory, groupEvents, niceTicks, profileUsername, describeRel, parseUsernames, toCsv, matchesKind, tokensFromHtml, jazoest, judgeAction, findFollowing, lostSince, whoLeft, computeStats, loopsFrom, carryMe, preCheck, UNDO, appendLog, markUndone, parsePending, mergePending, shortNum, followBackOdds, sortRows, pruneCounts, goneSet, reactivations, reclassifyEvents, picCandidates, emptyDates, applyDateEvents, importDates, sinceOf, guessListKind, zipReadFile, shouldAutoCheck, autoCheckDefault, parseRelease, pickExportEntry } = CORE;
   const CSS = typeof FBC_CSS === 'string' ? FBC_CSS : '';
   const HOST = typeof window.FBC_HOST === 'string' ? window.FBC_HOST : 'extension';
   const MOBILE = HOST === 'android' || (window.innerWidth < 700 && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
@@ -1582,22 +1591,54 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
   const cs = (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) ? chrome.storage.local : null;
   // Where the script runs; the userscript looks like the extension except for the missing extension storage.
   const RUNTIME = HOST === 'android' ? 'android' : HOST === 'bookmarklet' ? 'bookmarklet' : cs ? 'extension' : 'userscript';
+  // The Android app keeps the data in its own files: the site's localStorage holds about 5 MB, shared with
+  // Instagram, and a big account's snapshots outgrow it. An app build from before that has no storeGet.
+  const appStore = () => { const a = hostApp(); return a && typeof a.storeGet === 'function' && typeof a.storeSet === 'function' ? a : null; };
+  const lsGet = (k) => { try { return JSON.parse(localStorage.getItem('fbc:' + k) || 'null'); } catch (e) { return null; } };
+  const lsSet = (k, v) => { try { localStorage.setItem('fbc:' + k, JSON.stringify(v)); return true; } catch (e) { return false; } };
+  const lsRemove = (k) => { try { localStorage.removeItem('fbc:' + k); } catch (e) { /* ignore */ } };
+  const appSet = (app, k, v) => { try { return app.storeSet(k, JSON.stringify(v)) === true; } catch (e) { return false; } };
   function storageGet(keys) {
     return new Promise((resolve) => {
       if (cs) {
         try { cs.get(keys, (r) => resolve(r || {})); return; } catch (e) { /* fall through */ }
       }
       const out = {};
-      for (const k of keys) { try { out[k] = JSON.parse(localStorage.getItem('fbc:' + k) || 'null'); } catch (e) { out[k] = null; } }
+      const app = appStore();
+      for (const k of keys) {
+        let text = '';
+        if (app) { try { text = app.storeGet(k) || ''; } catch (e) { text = ''; } }
+        if (text) { try { out[k] = JSON.parse(text); } catch (e) { out[k] = null; } continue; }
+        out[k] = lsGet(k);
+        // Data from before the app kept its own files moves there on first read, freeing the site's storage.
+        if (app && out[k] != null && appSet(app, k, out[k])) lsRemove(k);
+      }
       resolve(out);
     });
+  }
+  // A write that did not stick (storage full, or refused) is said in the panel, and once per page as a toast;
+  // otherwise checks would go on while the history silently stopped.
+  let saveToasted = false;
+  function saveFailed() {
+    try {
+      showError(t('saveFailed'));
+      if (!saveToasted) { saveToasted = true; toast(t('saveFailed')); }
+    } catch (e) { /* the panel is not built yet */ }
   }
   function storageSet(obj) {
     return new Promise((resolve) => {
       if (cs) {
-        try { cs.set(obj, () => resolve()); return; } catch (e) { /* fall through */ }
+        try {
+          cs.set(obj, () => { if (chrome.runtime && chrome.runtime.lastError) saveFailed(); resolve(); });
+          return;
+        } catch (e) { /* fall through */ }
       }
-      for (const [k, v] of Object.entries(obj)) { try { localStorage.setItem('fbc:' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } }
+      const app = appStore();
+      let ok = true;
+      for (const [k, v] of Object.entries(obj)) {
+        if (app) { if (appSet(app, k, v)) lsRemove(k); else ok = false; } else if (!lsSet(k, v)) ok = false;
+      }
+      if (!ok) saveFailed();
       resolve();
     });
   }
@@ -1606,7 +1647,11 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       if (cs) {
         try { cs.remove(keys, () => resolve()); return; } catch (e) { /* fall through */ }
       }
-      for (const k of keys) { try { localStorage.removeItem('fbc:' + k); } catch (e) { /* ignore */ } }
+      const app = appStore();
+      for (const k of keys) {
+        if (app && typeof app.storeRemove === 'function') { try { app.storeRemove(k); } catch (e) { /* ignore */ } }
+        lsRemove(k);
+      }
       resolve();
     });
   }
@@ -2242,7 +2287,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
         if (!name || state.snap !== snap) return false;
         snap.me = name;
         ui.me.textContent = '@' + name;
-        await storageSet({ [acctStoreKey(snap.uid)]: { last: snap, prev: state.prev } });
+        await storageSet({ [acctStoreKey(snap.uid)]: { last: snap, prev: slimSnap(state.prev) } });
         return true;
       }).catch(() => false).finally(() => { meLookup = null; });
     }
@@ -3047,7 +3092,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
       state.prev = state.snap;
       state.snap = snap;
       noteDates(events, snap.at);
-      await storageSet({ [acctStoreKey(uid)]: { last: snap, prev: state.prev }, [histStoreKey(uid)]: state.hist, [datesStoreKey(uid)]: state.dates });
+      await storageSet({ [acctStoreKey(uid)]: { last: snap, prev: slimSnap(state.prev) }, [histStoreKey(uid)]: state.hist, [datesStoreKey(uid)]: state.dates });
       state.tab = 'notback';
       applySnapshot();
       toast(t('toastChecked', { a: num(snap.following.length), b: num(snap.followers.length) }));
@@ -3388,7 +3433,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     noteDates([ev], snap.at);
     state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
     refreshFlags();
-    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist, [datesStoreKey(state.uid)]: state.dates });
+    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: slimSnap(state.prev) }, [histStoreKey(state.uid)]: state.hist, [datesStoreKey(state.uid)]: state.dates });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
     applyTiles();
   }
@@ -3410,7 +3455,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     noteDates(evs, snap.at);
     state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
     refreshFlags();
-    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist, [datesStoreKey(state.uid)]: state.dates });
+    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: slimSnap(state.prev) }, [histStoreKey(state.uid)]: state.hist, [datesStoreKey(state.uid)]: state.dates });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
     applyTiles();
   }
@@ -3447,7 +3492,7 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
     noteDates(evs, snap.at);
     state.lists = derive(new Map(snap.following.map((x) => [x.u, x])), new Map(snap.followers.map((x) => [x.u, x])));
     refreshFlags();
-    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: state.prev }, [histStoreKey(state.uid)]: state.hist, [datesStoreKey(state.uid)]: state.dates });
+    if (state.uid) storageSet({ [acctStoreKey(state.uid)]: { last: snap, prev: slimSnap(state.prev) }, [histStoreKey(state.uid)]: state.hist, [datesStoreKey(state.uid)]: state.dates });
     ui.ledger.textContent = t('ledger', { nf: num(snap.following.length), nfRaw: snap.following.length, nw: num(snap.followers.length), nwRaw: snap.followers.length });
     applyTiles();
   }

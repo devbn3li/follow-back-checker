@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit
  * What the page may ask the app for: saving a text file (the CSV and JSON exports) into the
  * phone's Downloads folder, since a WebView cannot download a file the page builds itself;
  * recording checks and the reminder setting for the weekly reminder; the installed version and
- * the latest GitHub release; and opening a link in the phone's browser.
+ * the latest GitHub release; opening a link in the phone's browser; and keeping the checker's data.
  */
 class HostBridge(private val activity: Activity) {
     @JavascriptInterface
@@ -150,4 +150,18 @@ class HostBridge(private val activity: Activity) {
     /** The latest GitHub release as the API's JSON (cached for up to six hours), or "" when unknown. */
     @JavascriptInterface
     fun latestRelease(): String = ReleaseStore.cached(activity)
+
+    /**
+     * The checker's data (snapshots, history, settings) as JSON text, one file per key in the app's
+     * private files: no 5 MB cap shared with Instagram's own localStorage. "" when there is none.
+     */
+    @JavascriptInterface
+    fun storeGet(key: String): String = DataStore.get(activity, key)
+
+    /** Writes one key; false when the key or the size is refused or the write failed. */
+    @JavascriptInterface
+    fun storeSet(key: String, json: String): Boolean = DataStore.set(activity, key, json)
+
+    @JavascriptInterface
+    fun storeRemove(key: String) = DataStore.remove(activity, key)
 }

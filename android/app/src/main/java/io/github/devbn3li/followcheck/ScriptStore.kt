@@ -15,15 +15,38 @@ object ScriptStore {
     private const val MARKER = "Follow Back Checker"
 
     fun load(ctx: Context): String {
-        val cached = File(ctx.filesDir, FILE)
-        if (cached.exists() && cached.length() > 1000) {
-            try { return cached.readText() } catch (e: Exception) { /* fall back to the bundled copy */ }
-        }
-        return try {
+        val bundled = try {
             ctx.assets.open("checker.js").bufferedReader().use { it.readText() }
         } catch (e: Exception) {
             ""
         }
+        val file = File(ctx.filesDir, FILE)
+        val cached = try { if (file.exists() && file.length() > 1000) file.readText() else "" } catch (e: Exception) { "" }
+        return pick(cached, bundled)
+    }
+
+    /**
+     * The refreshed copy unless the APK carries a newer one: after an app update without a network,
+     * the copy refreshed before the update is older than the one in the new APK.
+     */
+    fun pick(cached: String, bundled: String): String {
+        if (cached.isEmpty()) return bundled
+        if (bundled.isEmpty()) return cached
+        return if (compareVersions(versionOf(bundled), versionOf(cached)) > 0) bundled else cached
+    }
+
+    /** The version in the bundle's first line, "Follow Back Checker 1.11.2.", or "". */
+    fun versionOf(text: String): String =
+        Regex("""$MARKER (\d+\.\d+\.\d+)""").find(text.take(300))?.groupValues?.get(1) ?: ""
+
+    fun compareVersions(a: String, b: String): Int {
+        val x = a.split('.').map { it.toIntOrNull() ?: 0 }
+        val y = b.split('.').map { it.toIntOrNull() ?: 0 }
+        for (i in 0 until maxOf(x.size, y.size)) {
+            val d = x.getOrElse(i) { 0 }.compareTo(y.getOrElse(i) { 0 })
+            if (d != 0) return d
+        }
+        return 0
     }
 
     fun refresh(ctx: Context): String? {
