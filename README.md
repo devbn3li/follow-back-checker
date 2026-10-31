@@ -28,7 +28,7 @@ The app is a single screen with Instagram's website inside it and the checker in
 
 1. Open `chrome://extensions` (Edge: `edge://extensions`, Brave: `brave://extensions`).
 2. Turn on **Developer mode**, click **Load unpacked**, pick the `extension/` folder.
-3. Open instagram.com and click **Follow check** at the bottom right, or the extension's toolbar icon.
+3. Open instagram.com and click **Follow check** at the bottom right, or the extension's toolbar icon. Drag the button to put it anywhere; Settings can hide it and leave only the toolbar icon.
 
 ## What the panel does
 

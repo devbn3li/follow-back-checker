@@ -348,12 +348,12 @@
     changes: { label: 'tileHistory', title: 'titleHistory', empty: '' },
   };
   const freshActions = () => ({ times: [], pausedUntil: 0, warned: false });
-  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), loops: new Map(), react: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0, countsPausedUntil: 0, dates: null, autoCheck: false, speed: 'safe', batch: null, upd: { at: 0, seen: '', rel: null } };
+  const state = { uid: '', snap: null, prev: null, done: {}, white: {}, actions: freshActions(), lists: null, hist: null, log: [], pending: [], counts: {}, countsRun: null, sort: 'name', left: new Map(), loops: new Map(), react: new Map(), onlyLeft: false, evFilter: 'all', kind: 'all', showProtected: false, tab: 'notback', q: '', hideDone: false, running: false, ctl: null, open: false, width: 640, cooldownUntil: 0, countsPausedUntil: 0, dates: null, autoCheck: false, speed: 'safe', showFab: true, fabPos: null, batch: null, upd: { at: 0, seen: '', rel: null } };
   const live = { following: 0, followers: 0 };
   const ui = {};
   // Small preferences, remembered across visits: language, panel width, and the pause after Instagram asks us to slow down.
   const UI_KEY = 'fbc.ui';
-  function saveUi() { storageSet({ [UI_KEY]: { lang, width: state.width, cooldownUntil: state.cooldownUntil, countsPausedUntil: state.countsPausedUntil, autoCheck: state.autoCheck, speed: state.speed, upd: state.upd } }); }
+  function saveUi() { storageSet({ [UI_KEY]: { lang, width: state.width, cooldownUntil: state.cooldownUntil, countsPausedUntil: state.countsPausedUntil, autoCheck: state.autoCheck, speed: state.speed, showFab: state.showFab, fabPos: state.fabPos, upd: state.upd } }); }
   let prefsLoaded;
   const prefsReady = new Promise((resolve) => { prefsLoaded = resolve; }); // the automatic check waits for the settings
   const WIDTH = { def: 640, min: 380, max: 1100, narrowBelow: 560 };
@@ -393,9 +393,61 @@
       resizeTimer = setTimeout(rerenderChart, 150);
     });
   }
+  // The Follow check button: hidden by a setting in the extension, and placed wherever it was dragged to.
+  // The stack keeps its bottom edge, so the profile pill grows upwards, and hangs from the nearer side.
+  function applyFab() {
+    ui.fab.hidden = RUNTIME === 'extension' && !state.showFab;
+    placeFab();
+  }
+  function placeFab() {
+    const s = ui.fabwrap.style;
+    const p = state.fabPos;
+    if (!p) { s.left = s.right = s.bottom = s.justifyItems = ''; return; }
+    const r = ui.fab.getBoundingClientRect();
+    const x = Math.round(Math.max(0, Math.min((window.innerWidth || 0) - (r.width || 120), p.x)));
+    const b = Math.round(Math.max(0, Math.min((window.innerHeight || 0) - (r.height || 40), p.b)));
+    s.left = p.side === 'l' ? x + 'px' : 'auto';
+    s.right = p.side === 'r' ? x + 'px' : 'auto';
+    s.bottom = b + 'px';
+    s.justifyItems = p.side === 'l' ? 'left' : 'right';
+  }
+  function wireFabDrag() {
+    let drag = null;
+    let moved = false; // a press that barely moves is a click
+    const end = (e) => {
+      if (!drag) return;
+      drag = null;
+      ui.fab.classList.remove('dragging');
+      try { ui.fab.releasePointerCapture(e.pointerId); } catch (e2) { /* ignore */ }
+      if (moved) saveUi();
+    };
+    ui.fab.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      const r = ui.fab.getBoundingClientRect();
+      drag = { x: e.clientX, y: e.clientY, dx: e.clientX - r.left, dy: e.clientY - r.top, w: r.width, h: r.height };
+      moved = false;
+      try { ui.fab.setPointerCapture(e.pointerId); } catch (e2) { /* ignore */ }
+    });
+    ui.fab.addEventListener('pointermove', (e) => {
+      if (!drag || (!moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6)) return;
+      moved = true;
+      ui.fab.classList.add('dragging');
+      const left = e.clientX - drag.dx;
+      const side = left + drag.w / 2 < window.innerWidth / 2 ? 'l' : 'r';
+      state.fabPos = { side, x: Math.round(side === 'l' ? left : window.innerWidth - left - drag.w), b: Math.round(window.innerHeight - (e.clientY - drag.dy) - drag.h) };
+      placeFab();
+    });
+    ui.fab.addEventListener('pointerup', end);
+    ui.fab.addEventListener('pointercancel', end);
+    ui.fab.addEventListener('click', () => {
+      if (moved) { moved = false; return; }
+      toggle();
+    });
+    window.addEventListener('resize', placeFab);
+  }
 
   function build() {
-    ui.fab = h('button', { class: 'fab', type: 'button', onclick: () => toggle() });
+    ui.fab = h('button', { class: 'fab', type: 'button' }); // clicks and drags are told apart in wireFabDrag()
     ui.relDot = h('span', { class: 'dot' });
     ui.relName = h('b');
     ui.relText = h('span', { class: 'reltext' });
@@ -482,12 +534,16 @@
     ui.speedSel = h('select', { class: 'field sel', onchange: () => { state.speed = SPEEDS[ui.speedSel.value] ? ui.speedSel.value : 'safe'; saveUi(); updateSpeedHint(); renderList(); } }, ui.speedOpts);
     ui.speedText = h('span');
     ui.speedHint = h('div', { class: 'hint' });
+    ui.showFab = h('input', { type: 'checkbox', checked: true, onchange: () => { state.showFab = ui.showFab.checked; saveUi(); applyFab(); } });
+    ui.showFabText = h('span');
+    ui.showFabWrap = h('label', { class: 'chk', hidden: RUNTIME !== 'extension' }, ui.showFab, ui.showFabText); // only the extension has another way in: its toolbar icon
+    ui.fabHint = h('div', { class: 'hint' });
     ui.datesHint = h('div', { class: 'hint' });
     ui.datesFile = h('input', { type: 'file', accept: '.zip,.json,.html,.htm,application/zip,application/x-zip-compressed,application/json,text/html', hidden: true, onchange: () => importDatesFile() });
     ui.datesImport = h('button', { class: 'btn small', type: 'button', onclick: () => ui.datesFile.click() });
     ui.datesStatus = h('div', { class: 'hint' });
     ui.picStatus = h('div', { class: 'hint', hidden: true });
-    ui.settings = h('div', { class: 'settings', hidden: true }, ui.settingsTitle, h('label', { class: 'chk' }, ui.autoCheck, ui.autoCheckText), ui.reminderWrap, h('label', { class: 'chk' }, ui.speedText, ui.speedSel), ui.speedHint, ui.datesHint, h('div', { class: 'toolbar' }, ui.datesImport, ui.datesFile), ui.datesStatus, ui.picStatus);
+    ui.settings = h('div', { class: 'settings', hidden: true }, ui.settingsTitle, h('label', { class: 'chk' }, ui.autoCheck, ui.autoCheckText), ui.reminderWrap, h('label', { class: 'chk' }, ui.speedText, ui.speedSel), ui.speedHint, ui.showFabWrap, ui.fabHint, ui.datesHint, h('div', { class: 'toolbar' }, ui.datesImport, ui.datesFile), ui.datesStatus, ui.picStatus);
     // Update notice: shown when GitHub's latest release is newer than what runs here.
     ui.updText = h('span', { class: 'updtext' });
     ui.updGet = h('button', { class: 'btn small primary', type: 'button', onclick: () => openUpdate() });
@@ -533,6 +589,7 @@
     root.append(ui.fabwrap, ui.drawer, ui.lightbox);
     relabel();
     wireResize();
+    wireFabDrag();
     applyWidth(state.width);
     storageGet([UI_KEY]).then((r) => {
       const prefs = r[UI_KEY] && typeof r[UI_KEY] === 'object' ? r[UI_KEY] : {};
@@ -545,6 +602,11 @@
       state.speed = SPEEDS[prefs.speed] ? prefs.speed : 'safe';
       ui.speedSel.value = state.speed;
       updateSpeedHint();
+      state.showFab = prefs.showFab !== false;
+      ui.showFab.checked = state.showFab;
+      const p = prefs.fabPos;
+      state.fabPos = p && (p.side === 'l' || p.side === 'r') && Number.isFinite(p.x) && Number.isFinite(p.b) ? { side: p.side, x: p.x, b: p.b } : null;
+      applyFab();
       const upd = prefs.upd && typeof prefs.upd === 'object' ? prefs.upd : {};
       state.upd = { at: Number(upd.at) || 0, seen: typeof upd.seen === 'string' ? upd.seen : '', rel: upd.rel && typeof upd.rel === 'object' ? upd.rel : null };
       prefsLoaded();
@@ -569,6 +631,9 @@
     const speedKeys = { safe: 'speedSafe', medium: 'speedMedium', fast: 'speedFast' };
     ui.speedOpts.forEach((o) => { o.textContent = t(speedKeys[o.value]); });
     updateSpeedHint();
+    ui.showFabText.textContent = t('showFab');
+    ui.fabHint.textContent = t(RUNTIME === 'extension' ? 'fabHintExt' : 'fabHint');
+    ui.fab.title = t('fabDrag');
     ui.batchCount.title = t('batchCountTitle');
     ui.batchCount.setAttribute('aria-label', t('batchCountTitle'));
     labelBatch();

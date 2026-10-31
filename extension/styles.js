@@ -31,6 +31,8 @@ button, input, select { font: inherit; color: inherit; }
   padding: 10px 16px; font-weight: 600; cursor: pointer; box-shadow: 0 6px 20px var(--shadow);
 }
 .fab:hover { filter: brightness(1.08); }
+.fab { touch-action: none; user-select: none; -webkit-user-select: none; }
+.fab.dragging { cursor: grabbing; filter: brightness(1.08); }
 .rel {
   display: inline-flex; align-items: center; gap: 8px; max-width: 100%; text-align: start;
   background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 999px;
